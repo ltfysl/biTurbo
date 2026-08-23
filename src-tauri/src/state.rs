@@ -28,8 +28,9 @@ pub struct AppState {
     pub default_project_id: String,
     pub app: Option<AppHandle>,
     pub index_size_cache: parking_lot::Mutex<Option<(Instant, u64)>>,
-    index_access_times: Arc<Mutex<HashMap<String, Instant>>>,
     pub index_memory_budget: u64,
+    index_access_times: Arc<Mutex<HashMap<String, Instant>>>,
+    index_rebuild_in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Clone for AppState {
@@ -45,6 +46,7 @@ impl Clone for AppState {
             index_size_cache: parking_lot::Mutex::new(None),
             index_access_times: self.index_access_times.clone(),
             index_memory_budget: self.index_memory_budget,
+            index_rebuild_in_flight: self.index_rebuild_in_flight.clone(),
         }
     }
 }
@@ -77,6 +79,7 @@ impl AppState {
             app: None,
             index_size_cache: parking_lot::Mutex::new(None),
             index_access_times: Arc::new(Mutex::new(HashMap::new())),
+            index_rebuild_in_flight: Arc::new(Mutex::new(HashSet::new())),
             index_memory_budget: DEFAULT_INDEX_BUDGET,
         };
 
@@ -311,13 +314,25 @@ impl AppState {
         *self.index_size_cache.lock() = Some((Instant::now(), n));
         n
     }
-
     /// Embed text and add to a project's index. Returns the vector length.
     pub fn embed_and_add(&self, project_id: &str, uid: &str, text: &str) -> BiResult<usize> {
         let vec = self.embedder_for_project(project_id)?.embed(text)?;
-        let idx = self.get_or_load_index(project_id)?;
+        let mut idx = self.get_or_load_index(project_id)?;
+        // A model rebuild can swap the on-disk index while this Arc is in
+        // flight; never write into a detached instance.
+        if !self.index_is_current(project_id, &idx) {
+            idx = self.get_or_load_index(project_id)?;
+        }
         idx.add(uid, &vec)?;
         Ok(vec.len())
+    }
+
+    /// True when `idx` is still the instance the cache maps this project to.
+    fn index_is_current(&self, project_id: &str, idx: &Arc<ProjectIndex>) -> bool {
+        self.indices
+            .read()
+            .get(project_id)
+            .is_some_and(|current| Arc::ptr_eq(current, idx))
     }
 
     /// Flush every dirty project index to disk. Cheap no-op if nothing changed.
@@ -328,6 +343,108 @@ impl AppState {
         }
     }
 
+    /// Active (non-superseded) memory rows for a project, ordered by uid so
+    /// embedding batches are deterministic across calls.
+    fn active_memory_rows(&self, project_id: &str) -> BiResult<Vec<(String, String)>> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT uid, content FROM memories WHERE project_id = ?1 AND superseded_by IS NULL",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![project_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Record the current uid-set digest of `idx` as verified state.
+    fn persist_index_state(&self, project_id: &str, idx: &Arc<ProjectIndex>) -> BiResult<()> {
+        let digest = idx.uid_digest();
+        let now = chrono::Utc::now().timestamp_millis();
+        self.db.write(|tx| {
+            tx.execute(
+                "INSERT INTO index_state(project_id, last_applied_mutation, content_digest, verified_at)
+                 VALUES(?1, COALESCE((SELECT MAX(id) FROM index_mutations WHERE project_id = ?1), 0), ?2, ?3)
+                 ON CONFLICT(project_id) DO UPDATE SET content_digest = excluded.content_digest,
+                    last_applied_mutation = excluded.last_applied_mutation,
+                    verified_at = excluded.verified_at",
+                rusqlite::params![project_id, digest, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// True when the loaded index no longer matches SQLite's active uid set.
+    fn index_is_stale(&self, idx: &Arc<ProjectIndex>, active_count: usize) -> BiResult<bool> {
+        if idx.len() != active_count {
+            return Ok(true);
+        }
+        let expected: Option<String> = {
+            let conn = self.db.conn()?;
+            conn.query_row(
+                "SELECT content_digest FROM index_state WHERE project_id = ?1",
+                rusqlite::params![idx.project_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap_or(None)
+        };
+        Ok(expected
+            .as_deref()
+            .is_some_and(|expected| expected != idx.uid_digest()))
+    }
+
+    /// Embed only the vectors missing from the index, then refresh the digest.
+    fn backfill_missing_vectors(
+        &self,
+        project_id: &str,
+        idx: &Arc<ProjectIndex>,
+        rows: &[(String, String)],
+        missing: &[String],
+    ) -> BiResult<()> {
+        let missing: HashSet<&String> = missing.iter().collect();
+        const BATCH: usize = 32;
+        for chunk in rows
+            .iter()
+            .filter(|(uid, _)| missing.contains(uid))
+            .collect::<Vec<_>>()
+            .chunks(BATCH)
+        {
+            let texts: Vec<&str> = chunk.iter().map(|(_, content)| content.as_str()).collect();
+            let vectors = self.embedder_for_project(project_id)?.embed_batch(&texts)?;
+            let items: Vec<(String, Vec<f32>)> = chunk
+                .iter()
+                .zip(vectors)
+                .map(|((uid, _), vector)| (uid.clone(), vector))
+                .collect();
+            idx.add_batch(&items)?;
+        }
+        let _ = idx.flush();
+        self.persist_index_state(project_id, idx)
+    }
+
+    /// Hand a full rebuild to a background worker; at most one per project.
+    fn schedule_index_rebuild(&self, project_id: &str) {
+        if !self
+            .index_rebuild_in_flight
+            .lock()
+            .insert(project_id.to_string())
+        {
+            return;
+        }
+        let state = self.clone();
+        let pid = project_id.to_string();
+        if std::thread::Builder::new()
+            .name(format!("biturbo-index-rebuild-{pid}"))
+            .spawn(move || {
+                let _ = state.repair_index_if_needed(&pid);
+                state.index_rebuild_in_flight.lock().remove(&pid);
+            })
+            .is_err()
+        {
+            self.index_rebuild_in_flight.lock().remove(project_id);
+            tracing::warn!("failed to spawn background index rebuild for '{project_id}'");
+        }
+    }
+
     pub fn embed_and_search(
         &self,
         project_id: &str,
@@ -335,10 +452,35 @@ impl AppState {
         k: usize,
         allowlist: Option<&[String]>,
     ) -> BiResult<Vec<crate::index_engine::SearchHit>> {
-        self.repair_index_if_needed(project_id)?;
+        self.sync_index_if_stale(project_id)?;
         let vec = self.embedder_for_project(project_id)?.embed(query)?;
         let idx = self.get_or_load_index(project_id)?;
         idx.search(&vec, k, allowlist)
+    }
+
+    /// Cheap consistency pass before a search: apply pending journal
+    /// mutations, backfill purely-missing vectors inline, and hand larger
+    /// rebuilds to a background worker so a stale index never turns a search
+    /// into a blocking whole-project re-embedding job.
+    fn sync_index_if_stale(&self, project_id: &str) -> BiResult<()> {
+        self.replay_index_mutations(project_id)?;
+        let idx = self.get_or_load_index(project_id)?;
+        let rows = self.active_memory_rows(project_id)?;
+        let missing: Vec<String> = rows
+            .iter()
+            .map(|(uid, _)| uid.clone())
+            .filter(|uid| !idx.contains_uid(uid))
+            .collect();
+        if idx.len() <= rows.len() && !missing.is_empty() {
+            // Pure additive drift (new memories or a wiped index): catching up
+            // inline is bounded by the number of missing vectors.
+            self.backfill_missing_vectors(project_id, &idx, &rows, &missing)?;
+            return Ok(());
+        }
+        if self.index_is_stale(&idx, rows.len())? {
+            self.schedule_index_rebuild(project_id);
+        }
+        Ok(())
     }
 
     /// Backfill the vector index when SQLite has more active memories than the on-disk index.

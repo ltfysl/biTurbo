@@ -28,6 +28,26 @@ pub struct Operation {
     pub finished_at: Option<i64>,
 }
 
+/// Spawn an operation executor thread. A failed spawn must never leave the
+/// operation queued forever with nobody running it (#417).
+fn spawn_executor_thread<F>(state: &AppState, id: &str, name: String, body: F) -> BiResult<()>
+where
+    F: FnOnce() + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name)
+        .spawn(body)
+        .map(|_| ())
+        .map_err(|error| {
+            let _ = fail(
+                state,
+                id,
+                &format!("failed to spawn executor thread: {error}"),
+            );
+            BiError::Internal(format!("failed to spawn executor thread: {error}"))
+        })
+}
+
 pub fn create(
     state: &AppState,
     kind: &str,
@@ -108,9 +128,11 @@ pub fn update_progress(
     let now = chrono::Utc::now().timestamp_millis();
     let checkpoint = checkpoint.map(serde_json::Value::to_string);
     state.db.write(|tx| {
+        // The status predicate makes a late tick after a terminal state a no-op.
         tx.execute(
             "UPDATE operations SET phase = ?1, current = ?2, total = ?3,
-                 checkpoint = COALESCE(?4, checkpoint), updated_at = ?5 WHERE id = ?6",
+                 checkpoint = COALESCE(?4, checkpoint), updated_at = ?5
+             WHERE id = ?6 AND status IN ('queued', 'running')",
             rusqlite::params![phase, current as i64, total as i64, checkpoint, now, id],
         )?;
         Ok(())
@@ -202,6 +224,17 @@ pub fn recover_interrupted(state: &AppState) -> BiResult<usize> {
 }
 
 pub fn start_ingest(state: &AppState, project_id: &str, root: &Path) -> BiResult<Operation> {
+    start_ingest_with_kind(state, project_id, root, "ingest")
+}
+
+/// Create and spawn an ingest operation, preserving the caller's kind so a
+/// retried `watch_ingest` stays a watch ingest (#416).
+fn start_ingest_with_kind(
+    state: &AppState,
+    project_id: &str,
+    root: &Path,
+    kind: &str,
+) -> BiResult<Operation> {
     crate::project::get(state, project_id)?;
     if !root.is_dir() {
         return Err(BiError::Invalid(format!(
@@ -210,13 +243,13 @@ pub fn start_ingest(state: &AppState, project_id: &str, root: &Path) -> BiResult
         )));
     }
     let checkpoint = serde_json::json!({"root_path": root.to_string_lossy()});
-    let operation = create(state, "ingest", Some(project_id), Some(&checkpoint))?;
+    let operation = create(state, kind, Some(project_id), Some(&checkpoint))?;
     spawn_ingest(
         Arc::new(state.clone()),
         operation.id.clone(),
         project_id.to_string(),
         root.to_path_buf(),
-    );
+    )?;
     Ok(operation)
 }
 
@@ -269,12 +302,12 @@ pub fn start_multi_ingest(
     let operation = create(state, "multi_ingest", None, Some(&checkpoint))?;
     let state = Arc::new(state.clone());
     let id = operation.id.clone();
-    std::thread::Builder::new()
-        .name(format!("biturbo-operation-{id}"))
-        .spawn(move || {
-            let _ = execute_multi_ingest(&state, &id, projects);
-        })
-        .ok();
+    let state_for_thread = state.clone();
+    let thread_id = id.clone();
+    let thread_name = format!("biturbo-operation-{id}");
+    spawn_executor_thread(&state, &id, thread_name, move || {
+        let _ = execute_multi_ingest(&state_for_thread, &thread_id, projects);
+    })?;
     Ok(operation)
 }
 
@@ -286,12 +319,12 @@ pub fn start_consolidate(state: &AppState, project_id: Option<&str>) -> BiResult
     let state = Arc::new(state.clone());
     let id = operation.id.clone();
     let project_id = project_id.map(String::from);
-    std::thread::Builder::new()
-        .name(format!("biturbo-operation-{id}"))
-        .spawn(move || {
-            let _ = execute_consolidate(&state, &id, project_id.as_deref());
-        })
-        .ok();
+    let state_for_thread = state.clone();
+    let thread_id = id.clone();
+    let thread_name = format!("biturbo-operation-{id}");
+    spawn_executor_thread(&state, &id, thread_name, move || {
+        let _ = execute_consolidate(&state_for_thread, &thread_id, project_id.as_deref());
+    })?;
     Ok(operation)
 }
 
@@ -321,12 +354,12 @@ pub fn start_model_rebuild(
     let id = operation.id.clone();
     let project_id = project_id.to_string();
     let model = model.map(String::from);
-    std::thread::Builder::new()
-        .name(format!("biturbo-operation-{id}"))
-        .spawn(move || {
-            let _ = execute_model_rebuild(&state, &id, &project_id, model.as_deref());
-        })
-        .ok();
+    let state_for_thread = state.clone();
+    let thread_id = id.clone();
+    let thread_name = format!("biturbo-operation-{id}");
+    spawn_executor_thread(&state, &id, thread_name, move || {
+        let _ = execute_model_rebuild(&state_for_thread, &thread_id, &project_id, model.as_deref());
+    })?;
     Ok(operation)
 }
 
@@ -347,7 +380,7 @@ pub fn retry(state: &AppState, id: &str) -> BiResult<Operation> {
                 .and_then(|value| value.as_str())
                 .map(PathBuf::from)
                 .ok_or_else(|| BiError::Invalid("ingest retry has no root_path".into()))?;
-            start_ingest(state, &project_id, &root)
+            start_ingest_with_kind(state, &project_id, &root, operation.kind.as_str())
         }
         "multi_ingest" => {
             let projects = operation
@@ -420,7 +453,9 @@ pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
                     )?;
                     continue;
                 };
-                spawn_ingest(state.clone(), operation.id, project_id, root);
+                if spawn_ingest(state.clone(), operation.id, project_id, root).is_err() {
+                    continue;
+                }
                 resumed += 1;
             }
             "multi_ingest" => {
@@ -446,25 +481,32 @@ pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
                     continue;
                 }
                 let id = operation.id;
-                let state = state.clone();
-                std::thread::Builder::new()
-                    .name(format!("biturbo-operation-{id}"))
-                    .spawn(move || {
-                        let _ = execute_multi_ingest(&state, &id, projects);
-                    })
-                    .ok();
+                let state_for_thread = state.clone();
+                let thread_id = id.clone();
+                let thread_name = format!("biturbo-operation-{id}");
+                if spawn_executor_thread(&state, &id, thread_name, move || {
+                    let _ = execute_multi_ingest(&state_for_thread, &thread_id, projects);
+                })
+                .is_err()
+                {
+                    continue;
+                }
                 resumed += 1;
             }
             "consolidate" => {
                 let id = operation.id;
                 let project_id = operation.project_id;
-                let state = state.clone();
-                std::thread::Builder::new()
-                    .name(format!("biturbo-operation-{id}"))
-                    .spawn(move || {
-                        let _ = execute_consolidate(&state, &id, project_id.as_deref());
-                    })
-                    .ok();
+                let state_for_thread = state.clone();
+                let thread_id = id.clone();
+                let thread_name = format!("biturbo-operation-{id}");
+                if spawn_executor_thread(&state, &id, thread_name, move || {
+                    let _ =
+                        execute_consolidate(&state_for_thread, &thread_id, project_id.as_deref());
+                })
+                .is_err()
+                {
+                    continue;
+                }
                 resumed += 1;
             }
             "model_rebuild" => {
@@ -483,13 +525,21 @@ pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
                     .and_then(|value| value.as_str())
                     .map(String::from);
                 let id = operation.id;
-                let state = state.clone();
-                std::thread::Builder::new()
-                    .name(format!("biturbo-operation-{id}"))
-                    .spawn(move || {
-                        let _ = execute_model_rebuild(&state, &id, &project_id, model.as_deref());
-                    })
-                    .ok();
+                let state_for_thread = state.clone();
+                let thread_id = id.clone();
+                let thread_name = format!("biturbo-operation-{id}");
+                if spawn_executor_thread(&state, &id, thread_name, move || {
+                    let _ = execute_model_rebuild(
+                        &state_for_thread,
+                        &thread_id,
+                        &project_id,
+                        model.as_deref(),
+                    );
+                })
+                .is_err()
+                {
+                    continue;
+                }
                 resumed += 1;
             }
             unsupported => {
@@ -682,8 +732,10 @@ fn execute_model_rebuild(
             .write(true)
             .open(indices.join(format!("{project_id}.mutation.lock")))?;
         fs2::FileExt::lock_exclusive(&lock)?;
-        state.flush_all_indices();
-        state.indices.write().remove(project_id);
+        // Hold the cache write lock across the whole swap so a concurrent
+        // get_or_load_index can never re-open the old .tvim between renames.
+        let mut indices_guard = state.indices.write();
+        indices_guard.remove(project_id);
         if actual.exists() {
             std::fs::rename(&actual, &backup)?;
         }
@@ -731,15 +783,16 @@ fn execute_model_rebuild(
             if backup_meta.exists() {
                 std::fs::rename(&backup_meta, &actual_meta).ok();
             }
+            drop(indices_guard);
             let _ = fs2::FileExt::unlock(&lock);
             return Err(error);
         }
         fs2::FileExt::unlock(&lock)?;
+        drop(indices_guard);
         std::fs::remove_file(backup).ok();
         std::fs::remove_file(backup_meta).ok();
         std::fs::remove_dir_all(shadow_dir).ok();
         state.invalidate_project_embedder(project_id);
-        state.indices.write().remove(project_id);
         crate::project::get(state, project_id)
     })();
 
@@ -757,13 +810,18 @@ fn execute_model_rebuild(
     }
 }
 
-fn spawn_ingest(state: Arc<AppState>, id: String, project_id: String, root: PathBuf) {
-    std::thread::Builder::new()
-        .name(format!("biturbo-operation-{id}"))
-        .spawn(move || {
-            let _ = execute_ingest(&state, &id, &project_id, &root);
-        })
-        .ok();
+fn spawn_ingest(
+    state: Arc<AppState>,
+    id: String,
+    project_id: String,
+    root: PathBuf,
+) -> BiResult<()> {
+    let state_for_thread = state.clone();
+    let thread_id = id.clone();
+    let thread_name = format!("biturbo-operation-{id}");
+    spawn_executor_thread(&state, &id, thread_name, move || {
+        let _ = execute_ingest(&state_for_thread, &thread_id, &project_id, &root);
+    })
 }
 
 fn execute_ingest(
@@ -874,7 +932,7 @@ fn update_status(
                  error = ?4, updated_at = ?5,
                  started_at = COALESCE(?6, started_at),
                  finished_at = CASE WHEN ?7 THEN ?5 ELSE finished_at END
-             WHERE id = ?8",
+             WHERE id = ?8 AND status IN ('queued', 'running')",
             rusqlite::params![status, phase, result, error, now, started_at, terminal, id],
         )?;
         if changed == 0 {
