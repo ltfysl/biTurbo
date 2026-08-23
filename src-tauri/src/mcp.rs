@@ -74,10 +74,7 @@ struct JsonRpcRequest {
 }
 
 async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
-    if req.id.is_none() {
-        return None;
-    }
-    let id = req.id.as_ref().unwrap();
+    let id = req.id.as_ref()?;
     match req.method.as_str() {
         "initialize" => Some(ok(
             id,
@@ -331,10 +328,15 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
             if output_path.is_empty() {
                 return Err(BiError::Invalid("output_path cannot be empty".into()));
             }
-            let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+            let overwrite = args
+                .get("overwrite")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let exports_dir = state.data_dir.join("exports");
             if std::path::Path::new(&output_path).is_absolute() {
-                return Err(BiError::Invalid("output_path must be a relative path".into()));
+                return Err(BiError::Invalid(
+                    "output_path must be a relative path".into(),
+                ));
             }
             if std::path::Path::new(&output_path)
                 .components()

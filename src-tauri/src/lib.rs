@@ -95,7 +95,11 @@ fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
     {
         Ok(f) => f,
         Err(e) => {
-            tracing::error!("cannot open instance lock at {}: {}", lock_path.display(), e);
+            tracing::error!(
+                "cannot open instance lock at {}: {}",
+                lock_path.display(),
+                e
+            );
             return None;
         }
     };
@@ -111,7 +115,6 @@ fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
         }
     }
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
