@@ -32,7 +32,39 @@ pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": { "code": -32700, "message": format!("parse error: {e}") }
+                });
+                let out = serde_json::to_string(&response).unwrap_or_default();
+                let mut guard = stdout.lock().await;
+                guard.write_all(out.as_bytes()).await?;
+                guard.write_all(b"\n").await?;
+                guard.flush().await?;
+                continue;
+            }
+        };
+        if value.is_array() {
+            // MCP allows batch requests, but this server handles them one at a
+            // time. Reject with a single Invalid Request instead of a parse
+            // error so clients get a clean -32600 (#492).
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": Value::Null,
+                "error": { "code": -32600, "message": "batch requests are not supported" }
+            });
+            let out = serde_json::to_string(&response).unwrap_or_default();
+            let mut guard = stdout.lock().await;
+            guard.write_all(out.as_bytes()).await?;
+            guard.write_all(b"\n").await?;
+            guard.flush().await?;
+            continue;
+        }
+        match serde_json::from_value::<JsonRpcRequest>(value) {
             Ok(req) => {
                 let state = state.clone();
                 let stdout = stdout.clone();
