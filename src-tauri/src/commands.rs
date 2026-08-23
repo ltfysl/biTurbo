@@ -512,6 +512,68 @@ pub struct InstallMcpConfigResult {
 
 /// Install or merge biTurbo's MCP config into an agent's config file.
 /// Non-destructive: preserves existing servers, only adds/overwrites the `biturbo` entry.
+/// Merge a Codex TOML config string by removing the exact `[mcp_servers.biturbo]`
+/// section and appending the new block. Preserves unrelated sections and sections
+/// whose names merely share a prefix with the biturbo table.
+fn merge_toml_codex_config(content: &str, bin_path: &str) -> String {
+    let biturbo_block =
+        format!("[mcp_servers.biturbo]\ncommand = \"{bin_path}\"\nargs = []\n");
+
+    let mut new_content = String::new();
+    let mut skip = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed != "[mcp_servers.biturbo]" {
+            skip = false;
+        }
+        if trimmed == "[mcp_servers.biturbo]" {
+            skip = true;
+            continue;
+        }
+        if !skip {
+            new_content.push_str(line);
+            new_content.push('\n');
+        }
+    }
+
+    if !new_content.is_empty() && !new_content.ends_with("\n\n") {
+        new_content.push('\n');
+    }
+    new_content.push_str(&biturbo_block);
+    new_content
+}
+
+/// Read an existing JSON config file, treating an empty/whitespace file as an
+/// empty object. Fails loudly on parse errors so a corrupt config is never wiped.
+fn read_json_config(path: &std::path::Path) -> BiResult<serde_json::Value> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        crate::error::BiError::Invalid(format!("failed to read {}: {e}", path.display()))
+    })?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&content).map_err(|e| {
+        crate::error::BiError::Invalid(format!(
+            "{} contains invalid JSON; refusing to overwrite it: {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Write a config file atomically by renaming a sibling temp file into place.
+fn write_config(path: &std::path::Path, content: &str) -> BiResult<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, content).map_err(|e| {
+        crate::error::BiError::Io(format!("failed to write {}: {e}", tmp.display()))
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        crate::error::BiError::Io(format!("failed to finalize {}: {e}", path.display()))
+    })
+}
+
 #[tauri::command]
 pub fn install_mcp_config(
     _state: State<'_, AppState>,
@@ -561,119 +623,48 @@ pub fn install_mcp_config(
 
     match format {
         "json-cursor" => {
-            // Cursor/Windsurf/Claude: { "mcpServers": { "biturbo": { ... } } }
-            let mut root: serde_json::Value = if existed {
-                let content = std::fs::read_to_string(&config_path).map_err(|e| {
-                    crate::error::BiError::Invalid(format!(
-                        "failed to read {}: {e}",
-                        config_path.display()
-                    ))
-                })?;
-                serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
-
-            // Ensure mcpServers object exists
+            let mut root = read_json_config(&config_path)?;
             if root.get("mcpServers").is_none() {
                 root["mcpServers"] = serde_json::json!({});
             }
-
-            // Add/overwrite biturbo entry, preserve others
             root["mcpServers"]["biturbo"] = serde_json::json!({
                 "command": bin_path,
                 "args": [],
                 "env": {}
             });
-
             let output = serde_json::to_string_pretty(&root).map_err(|e| {
                 crate::error::BiError::Invalid(format!("failed to serialize JSON: {e}"))
             })?;
-            std::fs::write(&config_path, output).map_err(|e| {
-                crate::error::BiError::Invalid(format!(
-                    "failed to write {}: {e}",
-                    config_path.display()
-                ))
-            })?;
+            write_config(&config_path, &output)?;
         }
         "json-opencode" => {
-            // OpenCode: { "mcp": { "biturbo": { "type": "local", "command": [...], ... } } }
-            let mut root: serde_json::Value = if existed {
-                let content = std::fs::read_to_string(&config_path).map_err(|e| {
-                    crate::error::BiError::Invalid(format!(
-                        "failed to read {}: {e}",
-                        config_path.display()
-                    ))
-                })?;
-                serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
-            } else {
-                serde_json::json!({})
-            };
-
+            let mut root = read_json_config(&config_path)?;
             if root.get("mcp").is_none() {
                 root["mcp"] = serde_json::json!({});
             }
-
             root["mcp"]["biturbo"] = serde_json::json!({
                 "type": "local",
                 "command": [bin_path],
                 "enabled": true
             });
-
             let output = serde_json::to_string_pretty(&root).map_err(|e| {
                 crate::error::BiError::Invalid(format!("failed to serialize JSON: {e}"))
             })?;
-            std::fs::write(&config_path, output).map_err(|e| {
-                crate::error::BiError::Invalid(format!(
-                    "failed to write {}: {e}",
-                    config_path.display()
-                ))
-            })?;
+            write_config(&config_path, &output)?;
         }
         "toml-codex" => {
-            // Codex: ~/.codex/config.toml — [mcp_servers.biturbo] table
-            // Simple text manipulation: remove existing [mcp_servers.biturbo] block, append new one.
-            let biturbo_block =
-                format!("[mcp_servers.biturbo]\ncommand = \"{bin_path}\"\nargs = []\n");
-
             let content = if existed {
-                std::fs::read_to_string(&config_path).unwrap_or_default()
+                std::fs::read_to_string(&config_path).map_err(|e| {
+                    crate::error::BiError::Invalid(format!(
+                        "failed to read {}: {e}",
+                        config_path.display()
+                    ))
+                })?
             } else {
                 String::new()
             };
-
-            // Remove existing [mcp_servers.biturbo] section (from header line to next section or EOF)
-            let mut new_content = String::new();
-            let mut skip = false;
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with('[') && !trimmed.starts_with("[mcp_servers.biturbo") {
-                    skip = false;
-                }
-                if trimmed == "[mcp_servers.biturbo]"
-                    || trimmed.starts_with("[mcp_servers.biturbo]")
-                {
-                    skip = true;
-                    continue;
-                }
-                if !skip {
-                    new_content.push_str(line);
-                    new_content.push('\n');
-                }
-            }
-
-            // Ensure there's a blank line before our block if content doesn't end with one
-            if !new_content.is_empty() && !new_content.ends_with("\n\n") {
-                new_content.push('\n');
-            }
-            new_content.push_str(&biturbo_block);
-
-            std::fs::write(&config_path, new_content).map_err(|e| {
-                crate::error::BiError::Invalid(format!(
-                    "failed to write {}: {e}",
-                    config_path.display()
-                ))
-            })?;
+            let new_content = merge_toml_codex_config(&content, bin_path);
+            write_config(&config_path, &new_content)?;
         }
         _ => unreachable!(),
     }
@@ -730,4 +721,36 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toml_merge_preserves_prefixed_sections() {
+        let input = "[foo]\nbar = 1\n\n[mcp_servers.biturbo-foo]\ncommand = \"/other\"\n\n[mcp_servers.biturbo]\ncommand = \"/old\"\n\n[baz]\nqux = 2\n";
+        let out = merge_toml_codex_config(input, "/new");
+        assert!(!out.contains("/old"), "old biturbo section should be removed");
+        assert!(out.contains("[mcp_servers.biturbo]"), "new biturbo section should be present");
+        assert!(out.contains("[foo]"), "unrelated [foo] should be preserved");
+        assert!(out.contains("[baz]"), "unrelated [baz] should be preserved");
+        assert!(out.contains("[mcp_servers.biturbo-foo]"), "prefixed section should be preserved");
+    }
+
+    #[test]
+    fn toml_merge_replaces_multiple_biturbo_sections() {
+        let input = "[mcp_servers.biturbo]\ncommand = \"/a\"\n\n[mcp_servers.biturbo]\ncommand = \"/b\"\n";
+        let out = merge_toml_codex_config(input, "/c");
+        let count = out.matches("[mcp_servers.biturbo]").count();
+        assert_eq!(count, 1, "only one biturbo section should remain");
+        assert!(out.contains("/c"), "new command should be present");
+    }
+
+    #[test]
+    fn toml_merge_appends_to_empty_content() {
+        let out = merge_toml_codex_config("", "/new");
+        assert!(out.contains("[mcp_servers.biturbo]"));
+        assert!(out.contains("command = \"/new\""));
+    }
 }
