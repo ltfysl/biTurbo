@@ -78,7 +78,7 @@ impl AppState {
             .read(true)
             .write(true)
             .open(lock_path)?;
-        fs2::FileExt::lock_exclusive(&lock)?;
+        fs4::fs_std::FileExt::lock_exclusive(&lock)?;
 
         let pending: Vec<PendingMutation> = {
             let conn = self.db.conn()?;
@@ -99,7 +99,7 @@ impl AppState {
             rows.filter_map(Result::ok).collect()
         };
         if pending.is_empty() {
-            fs2::FileExt::unlock(&lock)?;
+            fs4::fs_std::FileExt::unlock(&lock)?;
             return Ok(0);
         }
 
@@ -162,7 +162,7 @@ impl AppState {
             )?;
             Ok(())
         })?;
-        fs2::FileExt::unlock(&lock)?;
+        fs4::fs_std::FileExt::unlock(&lock)?;
         Ok(upserts.len() + deletes.len())
     }
 

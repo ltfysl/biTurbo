@@ -103,17 +103,22 @@ fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
             return None;
         }
     };
-    match fs2::FileExt::try_lock_exclusive(&lock) {
-        Ok(()) => Some(lock),
+    let acquired = match fs4::fs_std::FileExt::try_lock_exclusive(&lock) {
+        Ok(acquired) => acquired,
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             tracing::error!("biTurbo is already running");
-            None
+            return None;
         }
         Err(e) => {
             tracing::error!("cannot lock instance lock: {}", e);
-            None
+            return None;
         }
+    };
+    if !acquired {
+        tracing::error!("biTurbo is already running");
+        return None;
     }
+    Some(lock)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -131,9 +136,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()

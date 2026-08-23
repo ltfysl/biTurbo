@@ -18,11 +18,6 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:allow-read-dir",
-    "fs:allow-exists",
     "opener:default",
     {
       "identifier": "opener:allow-open-path",
@@ -40,9 +35,6 @@
         { "path": "**" }
       ]
     },
-    "opener:allow-reveal-item-in-dir",
-    "shell:allow-open",
-    "updater:default",
-    "process:default"
+    "opener:allow-reveal-item-in-dir"
   ]
 }

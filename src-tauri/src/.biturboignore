@@ -1,0 +1,10 @@
+# biTurbo ignore file
+# Patterns use gitignore syntax and are applied only by biTurbo ingest.
+# This file was created from .gitignore on first ingest.
+# Add files/folders here that should remain in git but stay out of semantic memory.
+
+# Examples:
+# dist/
+# target/
+# generated/
+# **/*.snap

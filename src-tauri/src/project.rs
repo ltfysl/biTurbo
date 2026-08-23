@@ -172,7 +172,7 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
                 .join("indices")
                 .join(format!("{id}.mutation.lock")),
         )?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+    fs4::fs_std::FileExt::lock_exclusive(&lock)?;
     state.flush_all_indices();
     crate::io::disable_watch(state, id)?;
 
@@ -197,7 +197,7 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
         log_activity(tx, Some(id), None, "delete_project", None, None)?;
         Ok(())
     });
-    fs2::FileExt::unlock(&lock)?;
+    fs4::fs_std::FileExt::unlock(&lock)?;
     if deleted.is_err() {
         let _ = state.repair_index_if_needed(id);
     }

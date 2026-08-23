@@ -57,14 +57,14 @@ fn prepare_database(db_path: &Path) -> BiResult<()> {
         .read(true)
         .write(true)
         .open(&lock_path)?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+    fs4::fs_std::FileExt::lock_exclusive(&lock)?;
 
     let existed = db_path.exists() && std::fs::metadata(db_path).is_ok_and(|m| m.len() > 0);
     let mut conn = rusqlite::Connection::open(db_path)?;
     conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version >= CURRENT_SCHEMA_VERSION {
-        fs2::FileExt::unlock(&lock)?;
+        fs4::fs_std::FileExt::unlock(&lock)?;
         return Ok(());
     }
 
@@ -92,10 +92,10 @@ fn prepare_database(db_path: &Path) -> BiResult<()> {
             );
         }
         restore_index_metadata(&index_metadata_backup);
-        let _ = fs2::FileExt::unlock(&lock);
+        let _ = fs4::fs_std::FileExt::unlock(&lock);
         return Err(error);
     }
-    fs2::FileExt::unlock(&lock)?;
+    fs4::fs_std::FileExt::unlock(&lock)?;
     Ok(())
 }
 
@@ -433,12 +433,12 @@ impl Db {
             .read(true)
             .write(true)
             .open(self.process_lock_path.as_ref())?;
-        fs2::FileExt::lock_exclusive(&process_lock)?;
+        fs4::fs_std::FileExt::lock_exclusive(&process_lock)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         let out = f(&tx)?;
         tx.commit()?;
-        fs2::FileExt::unlock(&process_lock)?;
+        fs4::fs_std::FileExt::unlock(&process_lock)?;
         Ok(out)
     }
 }

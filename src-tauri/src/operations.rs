@@ -203,11 +203,10 @@ pub fn recover_interrupted(state: &AppState) -> BiResult<usize> {
     let mut recovered = 0;
     for id in running {
         let lock = open_operation_lock(state, &id)?;
-        if let Err(error) = fs2::FileExt::try_lock_exclusive(&lock) {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
-                continue;
-            }
-            return Err(error.into());
+        match fs4::fs_std::FileExt::try_lock_exclusive(&lock) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => return Err(error.into()),
         }
         let now = chrono::Utc::now().timestamp_millis();
         recovered += state.db.write(|tx| {
@@ -218,7 +217,7 @@ pub fn recover_interrupted(state: &AppState) -> BiResult<usize> {
                 rusqlite::params![now, id],
             )?)
         })?;
-        fs2::FileExt::unlock(&lock)?;
+        fs4::fs_std::FileExt::unlock(&lock)?;
     }
     Ok(recovered)
 }
@@ -731,7 +730,7 @@ fn execute_model_rebuild(
             .read(true)
             .write(true)
             .open(indices.join(format!("{project_id}.mutation.lock")))?;
-        fs2::FileExt::lock_exclusive(&lock)?;
+        fs4::fs_std::FileExt::lock_exclusive(&lock)?;
         // Hold the cache write lock across the whole swap so a concurrent
         // get_or_load_index can never re-open the old .tvim between renames.
         let mut indices_guard = state.indices.write();
@@ -784,10 +783,10 @@ fn execute_model_rebuild(
                 std::fs::rename(&backup_meta, &actual_meta).ok();
             }
             drop(indices_guard);
-            let _ = fs2::FileExt::unlock(&lock);
+            let _ = fs4::fs_std::FileExt::unlock(&lock);
             return Err(error);
         }
-        fs2::FileExt::unlock(&lock)?;
+        fs4::fs_std::FileExt::unlock(&lock)?;
         drop(indices_guard);
         std::fs::remove_file(backup).ok();
         std::fs::remove_file(backup_meta).ok();
@@ -910,7 +909,7 @@ fn open_operation_lock(state: &AppState, id: &str) -> BiResult<std::fs::File> {
 
 fn lock_operation(state: &AppState, id: &str) -> BiResult<std::fs::File> {
     let lock = open_operation_lock(state, id)?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+    fs4::fs_std::FileExt::lock_exclusive(&lock)?;
     Ok(lock)
 }
 
