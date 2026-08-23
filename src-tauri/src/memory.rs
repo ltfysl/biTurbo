@@ -127,6 +127,13 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
                 .optional()?,
             None => None,
         };
+        if let Some(old_uid) = input.supersedes.as_deref() {
+            if superseded.is_none() {
+                return Err(BiError::Invalid(format!(
+                    "supersedes uid '{old_uid}' does not exist or is already superseded"
+                )));
+            }
+        }
         let supersedes_id = superseded.as_ref().map(|(id, _)| *id);
         tx.execute(
             "INSERT INTO memories(uid, project_id, mem_type, content, tags, source_agent,
@@ -199,6 +206,15 @@ pub fn forget(state: &AppState, uid: &str) -> BiResult<bool> {
     let mem = get(state, uid)?.ok_or_else(|| BiError::NotFound(uid.into()))?;
     let now = chrono::Utc::now().timestamp_millis();
     state.db.write(|tx| {
+        let row_id: i64 = tx.query_row(
+            "SELECT id FROM memories WHERE uid = ?1",
+            rusqlite::params![uid],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "UPDATE memories SET superseded_by = NULL WHERE superseded_by = ?1",
+            rusqlite::params![row_id],
+        )?;
         tx.execute(
             "DELETE FROM memories WHERE uid = ?1",
             rusqlite::params![uid],
@@ -384,14 +400,15 @@ pub fn search(
     }
 
     // Second-stage reranking: boost scores based on term matches in content, tags, path, and language
-    let query_terms = tokenize_query(query);
+    let query_terms = crate::recall::normalized_terms(query);
     let mut reranked: Vec<MemoryWithScore> = ranked
         .into_iter()
         .filter_map(|(uid, base_score)| {
             by_uid.remove(&uid).map(|memory| {
+                let feedback = feedback_boosts.get(&uid).copied().unwrap_or(0.0);
                 let reranked_score =
                     crate::recall::apply_ranking_boost(base_score, &memory, &query_terms)
-                        + feedback_boosts.get(&uid).copied().unwrap_or(0.0);
+                        + base_score * feedback;
                 MemoryWithScore {
                     memory,
                     score: reranked_score,
@@ -586,14 +603,6 @@ pub fn list_tags(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(St
     Ok(v)
 }
 
-/// Tokenize a query into normalized search terms.
-fn tokenize_query(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(|t| t.to_lowercase())
-        .filter(|t| t.len() >= 2)
-        .collect()
-}
 
 /// Filter out common stopwords from query terms
 pub(crate) fn filter_stopwords(terms: &[String]) -> Vec<String> {

@@ -5,13 +5,14 @@ use crate::project::{self, CreateProjectInput};
 use crate::state::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
 pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
-    let data_dir = dirs::data_dir()
-        .ok_or_else(|| anyhow::anyhow!("no data dir"))?
-        .join("com.biturbo.app");
+    let data_dir = std::env::var_os("BITURBO_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::data_dir().map(|d| d.join("com.biturbo.app")))
+        .ok_or_else(|| anyhow::anyhow!("no data dir"))?;
     std::fs::create_dir_all(&data_dir).ok();
     let state = Arc::new(AppState::open(&data_dir)?);
     crate::operations::resume_pending(state.clone())?;

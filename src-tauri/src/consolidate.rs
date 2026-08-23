@@ -5,6 +5,13 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Minimum cosine similarity in the embedding index for two memories to be
+/// considered duplicate candidates.
+const DUPLICATE_COSINE_THRESHOLD: f32 = 0.95;
+/// Minimum token-set Jaccard similarity for the two texts to be merged. This
+/// guards against near-duplicate-but-distinct memories that score highly in
+/// embedding space but differ in meaning (e.g. "staging" vs "production").
+const MIN_TOKEN_SIMILARITY: f32 = 0.85;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConsolidateReport {
     pub decayed: usize,
@@ -143,6 +150,21 @@ fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
     Ok(touched)
 }
 
+/// Simple token-set Jaccard similarity, case-insensitive.
+fn token_jaccard_similarity(a: &str, b: &str) -> f32 {
+    if a == b {
+        return 1.0;
+    }
+    let a: HashSet<String> = a.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let b: HashSet<String> = b.split_whitespace().map(|t| t.to_lowercase()).collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let intersection: HashSet<_> = a.intersection(&b).collect();
+    let union: HashSet<_> = a.union(&b).collect();
+    intersection.len() as f32 / union.len() as f32
+}
+
 fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(String, String)>> {
     let conn = state.db.conn()?;
     let project_ids: Vec<String> = match project_id {
@@ -200,7 +222,7 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
                 let a = &rows[i];
                 let hits = idx.search(vec, 5, None)?;
                 for h in hits {
-                    if h.score < 0.95 || h.uid == a.0 {
+                    if h.score < DUPLICATE_COSINE_THRESHOLD || h.uid == a.0 {
                         continue;
                     }
                     if let Some(b) = by_uid.get(h.uid.as_str()) {
@@ -209,6 +231,10 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
                         } else {
                             (b.0.clone(), a.0.clone())
                         };
+                        let similarity = token_jaccard_similarity(&a.1, &b.1);
+                        if similarity < MIN_TOKEN_SIMILARITY {
+                            continue;
+                        }
                         dupes.insert((keep, drop_));
                     }
                 }
@@ -258,12 +284,20 @@ fn merge_pair(state: &AppState, keep_uid: &str, drop_uid: &str) -> BiResult<bool
                AND EXISTS(SELECT 1 FROM memories k WHERE k.uid = ?1 AND k.superseded_by IS NULL)",
             rusqlite::params![keep_uid, now, drop_uid],
         )?;
+        if n > 0 {
+            crate::persistence::queue_index_delete(tx, &keep.project_id, drop_uid)?;
+            tx.execute(
+                "UPDATE projects SET memory_count = MAX(0, memory_count - 1), updated_at = ?1
+                 WHERE id = ?2",
+                rusqlite::params![now, &keep.project_id],
+            )?;
+        }
         Ok(n)
     })?;
     if superseded == 0 {
         return Ok(false);
     }
-    memory::forget(state, drop_uid)?;
+    state.replay_index_mutations(&keep.project_id)?;
     Ok(true)
 }
 

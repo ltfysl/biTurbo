@@ -1,8 +1,8 @@
 // Standalone MCP server binary. Spawned by AI agents via stdio.
 // Listens on stdin/stdout for JSON-RPC 2.0 (MCP protocol).
-
 use anyhow::Result;
 use biturbo_lib::mcp::run_mcp_server_stdio;
+use std::path::PathBuf;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -14,9 +14,13 @@ async fn main() -> Result<()> {
     std::env::set_var("ORT_DISABLE_CORE_ML", "1");
     std::env::set_var("ORT_DNNL_DISABLE", "1");
 
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.biturbo.app");
+    let data_dir = std::env::var_os("BITURBO_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::data_dir()
+                .map(|d| d.join("com.biturbo.app"))
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
     let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
 
