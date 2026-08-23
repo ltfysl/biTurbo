@@ -432,6 +432,23 @@ pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
     let pending = list(&state, 500)?;
     let mut resumed = 0;
     for operation in pending.into_iter().filter(|op| op.status == "queued") {
+        // Avoid duplicate execution when GUI and MCP binaries share a data
+        // directory and both call resume_pending concurrently (#480).
+        let op_lock = match open_operation_lock(&state, &operation.id) {
+            Ok(lock) => lock,
+            Err(error) => {
+                tracing::warn!("cannot open lock for {}: {error}", operation.id);
+                continue;
+            }
+        };
+        match fs4::fs_std::FileExt::try_lock_exclusive(&op_lock) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                tracing::warn!("cannot try-lock {}: {error}", operation.id);
+                continue;
+            }
+        }
         match operation.kind.as_str() {
             "ingest" | "watch_ingest" => {
                 let Some(project_id) = operation.project_id.clone() else {
