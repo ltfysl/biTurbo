@@ -35,6 +35,12 @@ interface RpcNotification {
   params?: unknown;
 }
 
+/** Awaiting RPC: resolvers kept so transport errors can fail pending calls. */
+interface PendingRpc {
+  resolve: (r: RpcResponse) => void;
+  reject: (e: Error) => void;
+}
+
 interface TestCase {
   name: string;
   tool: string;
@@ -79,13 +85,19 @@ function findBinary(): string {
 class McpClient {
   private proc: ChildProcessWithoutNullStreams;
   private buf = "";
-  private pending = new Map<RpcId, (r: RpcResponse) => void>();
+  private pending = new Map<RpcId, PendingRpc>();
   private nextId = 1;
   private toolNames = new Set<string>();
 
   constructor(bin: string) {
     this.proc = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stdout.on("data", (chunk: Buffer) => this.onStdout(chunk));
+    this.proc.on("error", (err) => {
+      this.rejectPending(new Error(`biturbo-mcp process error: ${err.message}`));
+    });
+    this.proc.stdin.on("error", (err) => {
+      this.rejectPending(new Error(`biturbo-mcp stdin error: ${err.message}`));
+    });
     this.proc.stderr.on("data", (chunk: Buffer) => {
       const s = chunk.toString("utf8");
       if (process.env.MCP_TEST_VERBOSE) process.stderr.write(`[mcp-stderr] ${s}`);
@@ -114,27 +126,46 @@ class McpClient {
         continue;
       }
       if ("id" in parsed && parsed.id !== undefined && this.pending.has(parsed.id as RpcId)) {
-        this.pending.get(parsed.id as RpcId)!(parsed as RpcResponse);
+        const entry = this.pending.get(parsed.id as RpcId)!;
         this.pending.delete(parsed.id as RpcId);
+        entry.resolve(parsed as RpcResponse);
       } else if ("method" in parsed) {
         // Notification from server. Ignore for now.
       }
     }
   }
 
+  private rejectPending(err: Error) {
+    for (const [, entry] of this.pending) entry.reject(err);
+    this.pending.clear();
+  }
+
   private send(req: RpcRequest): Promise<RpcResponse> {
-    return new Promise((resolveP, rejectP) => {
-      const id = req.id;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        rejectP(new Error(`RPC ${req.method} timed out`));
-      }, 15_000);
-      this.pending.set(id, (r) => {
+    const id = req.id;
+    const { promise, resolve, reject } = Promise.withResolvers<RpcResponse>();
+    const timer = setTimeout(() => {
+      const entry = this.pending.get(id);
+      this.pending.delete(id);
+      entry?.reject(new Error(`RPC ${req.method} timed out`));
+    }, 15_000);
+    this.pending.set(id, {
+      resolve: (r) => {
         clearTimeout(timer);
-        resolveP(r);
-      });
-      this.proc.stdin.write(JSON.stringify(req) + "\n");
+        resolve(r);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
     });
+    try {
+      this.proc.stdin.write(JSON.stringify(req) + "\n");
+    } catch (e) {
+      this.pending.delete(id);
+      clearTimeout(timer);
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
+    return promise;
   }
 
   async call(method: string, params?: unknown): Promise<RpcResponse> {
@@ -410,6 +441,8 @@ const tests: TestCase[] = [
       const text = extractText(r);
       return (text && /not (cancellable|found)|already|cannot|error/i.test(text)) || "expected a terminal error for retry";
     },
+  },
+  {
     name: "stats",
     tool: "stats",
     expect: (r) => {
