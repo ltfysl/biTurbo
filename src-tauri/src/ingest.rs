@@ -492,9 +492,9 @@ pub fn ingest_project_controlled(
             }
         }
     }
-
+    check_cancelled(state, operation_id)?;
     state.db.write(|tx| {
-        let now = chrono::Utc::now().timestamp_millis();
+      let now = chrono::Utc::now().timestamp_millis();
         for uid in &stale_uids {
             crate::persistence::queue_index_delete(tx, project_id, uid)?;
         }
@@ -595,15 +595,14 @@ pub fn ingest_project_controlled(
         Ok(())
     })?;
 
-    check_cancelled(state, operation_id)?;
     emit_progress(
-        state,
-        project_id,
-        "embedding",
-        total_chunks,
-        total_chunks,
-        None,
-        total_chunks,
+      state,
+      project_id,
+      "embedding",
+      total_chunks,
+      total_chunks,
+      None,
+      total_chunks,
     );
     if let Some(id) = operation_id {
         crate::operations::update_progress(
