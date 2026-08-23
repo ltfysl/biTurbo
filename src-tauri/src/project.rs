@@ -198,6 +198,10 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
     }
     let deleted = state.db.write(|tx| {
         tx.execute(
+            "DELETE FROM recall_feedback WHERE memory_uid IN (SELECT uid FROM memories WHERE project_id = ?1)",
+            rusqlite::params![id],
+        )?;
+        tx.execute(
             "DELETE FROM memories WHERE project_id = ?1",
             rusqlite::params![id],
         )?;
