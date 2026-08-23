@@ -12,12 +12,12 @@
 //! │   ├── embed              — fastembed (BGE) embeddings       │
 //! │   ├── ingest             — tree-sitter project indexing     │
 //! │   ├── consolidate        — decay / dedup / merge            │
-//! │   └── db                 — SQLite schema + connection pool  │
-//! └─────────────────────────────────────────────────────────────┘
 //!
 //! Data lives in the OS app-data dir (~/Library/Application Support/com.biturbo.app/
 //! on macOS, %APPDATA%\com.biturbo.app on Windows, ~/.local/share/com.biturbo.app on
 //! Linux). Both the GUI and the MCP server share the same on-disk state.
+
+pub const APP_DIR_NAME: &str = "com.biturbo.app";
 
 pub mod application;
 pub mod commands;
@@ -79,7 +79,7 @@ fn init_logging(data_dir: &std::path::Path) {
 }
 fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
     let data_dir = match dirs::data_dir() {
-        Some(d) => d.join("com.biturbo.app"),
+        Some(d) => d.join(crate::APP_DIR_NAME),
         None => {
             tracing::error!("no data dir");
             return None;

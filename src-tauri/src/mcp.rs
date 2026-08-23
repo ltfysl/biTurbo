@@ -11,10 +11,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
     let data_dir = std::env::var_os("BITURBO_DATA_DIR")
         .map(PathBuf::from)
-        .or_else(|| dirs::data_dir().map(|d| d.join("com.biturbo.app")))
+        .or_else(|| dirs::data_dir().map(|d| d.join(crate::APP_DIR_NAME)))
         .ok_or_else(|| anyhow::anyhow!("no data dir"))?;
     let state = Arc::new(AppState::open(&data_dir)?);
-    crate::operations::resume_pending(state.clone())?;
     // The standalone MCP binary has no GUI lifecycle to spawn the scheduler,
     // so start it here; otherwise consolidate/consolidate_status are unusable
     // and enqueue returns a "worker not started" error (#475).

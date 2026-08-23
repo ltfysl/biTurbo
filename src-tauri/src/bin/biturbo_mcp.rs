@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .or_else(|| {
             dirs::data_dir()
-                .map(|d| d.join("com.biturbo.app"))
+                .map(|d| d.join(biturbo_lib::APP_DIR_NAME))
                 .or_else(|| {
                     eprintln!("BITURBO_DATA_DIR not set and OS data directory is unavailable");
                     None
