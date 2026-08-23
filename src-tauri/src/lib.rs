@@ -153,7 +153,9 @@ pub fn run() {
             state.app = Some(app.handle().clone());
             let state_arc = Arc::new(state);
             scheduler::spawn(state_arc.clone());
-            let _ = operations::resume_pending(state_arc.clone());
+            if let Err(error) = operations::resume_pending(state_arc.clone()) {
+                tracing::error!("failed to resume pending operations: {error}");
+            }
             io::resume_watches(&state_arc);
             app.manage((*state_arc).clone());
             info!("biTurbo ready @ {}", data_dir.display());
