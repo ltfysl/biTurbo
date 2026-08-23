@@ -242,23 +242,31 @@ pub fn resolve_project_id(
                 for line in content.lines() {
                     if let Some(name) = line.strip_prefix("projectName=") {
                         let name = name.trim();
-                        if name.is_empty() {
-                            continue;
-                        }
                         let slug = slugify(name);
+                        // Prefer an exact id match; on multiple name matches
+                        // fail with the candidate list so recall rooted at a
+                        // directory cannot attach to the wrong project (#479).
                         if get(state, &slug).is_ok() {
                             return Ok(slug);
                         }
                         let conn = state.db.conn()?;
-                        let found: Option<String> = conn
-                            .query_row(
-                                "SELECT id FROM projects WHERE name = ?1 OR id = ?1 LIMIT 1",
-                                rusqlite::params![name],
-                                |r| r.get(0),
-                            )
-                            .optional()?;
-                        if let Some(id) = found {
-                            return Ok(id);
+                        let ids: Vec<String> = {
+                            let mut stmt = conn.prepare(
+                                "SELECT id FROM projects WHERE name = ?1 ORDER BY id",
+                            )?;
+                            let rows = stmt
+                                .query_map(rusqlite::params![name], |r| r.get::<_, String>(0))?;
+                            rows.filter_map(Result::ok).collect()
+                        };
+                        match ids.len() {
+                            0 => {}
+                            1 => return Ok(ids.into_iter().next().unwrap()),
+                            _ => {
+                                return Err(BiError::Invalid(format!(
+                                    "project name '{name}' is ambiguous; candidates: {}",
+                                    ids.join(", ")
+                                )))
+                            }
                         }
                     }
                 }
