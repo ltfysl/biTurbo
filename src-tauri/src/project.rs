@@ -230,6 +230,9 @@ pub fn resolve_project_id(
     root_path: Option<&str>,
 ) -> BiResult<String> {
     if let Some(pid) = project_id.filter(|s| !s.is_empty()) {
+        // Verify the explicit id exists before use; otherwise a typo'd id
+        // silently falls through to an empty result set (#478).
+        get(state, pid)?;
         return Ok(pid.to_string());
     }
     if let Some(root) = root_path.filter(|s| !s.is_empty()) {
