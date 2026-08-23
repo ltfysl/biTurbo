@@ -16,13 +16,16 @@ async fn main() -> Result<()> {
 
     let data_dir = std::env::var_os("BITURBO_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
+        .or_else(|| {
             dirs::data_dir()
                 .map(|d| d.join("com.biturbo.app"))
-                .unwrap_or_else(|| PathBuf::from("."))
-        });
+                .or_else(|| {
+                    eprintln!("BITURBO_DATA_DIR not set and OS data directory is unavailable");
+                    None
+                })
+        })
+        .ok_or_else(|| anyhow::anyhow!("cannot determine biTurbo data directory"))?;
     let log_dir = data_dir.join("logs");
-    std::fs::create_dir_all(&log_dir).ok();
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "biturbo-mcp.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
