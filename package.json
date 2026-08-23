@@ -4,13 +4,10 @@
   "version": "0.2.0",
   "type": "module",
   "description": "Local-first memory layer for AI coding agents. turbovec + Tauri 2 + MCP.",
-  "trustedDependencies": [
-    "esbuild",
-    "unrs-resolver"
-  ],
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "tauri": "tauri",

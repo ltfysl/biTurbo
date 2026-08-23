@@ -1,5 +1,5 @@
 // Creates a git tag matching the version in package.json and pushes it
-// to trigger the release workflow. Usage: pnpm release
+// to trigger the release workflow. Usage: npm run release
 //
 // Checks:
 //   - Working tree must be clean (no uncommitted changes)

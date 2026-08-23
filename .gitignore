@@ -12,6 +12,14 @@ dist-ssr
 *.local
 
 # Build artifacts
+
+# AI / local tooling state
+.opencode/
+.omo/
+.mavis/
+.cursor/
+pnpm-lock.yaml
+pnpm-workspace.yaml
 tsconfig.tsbuildinfo
 tsconfig.node.tsbuildinfo
 vite.config.d.ts
