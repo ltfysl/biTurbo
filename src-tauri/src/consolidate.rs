@@ -6,12 +6,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Minimum cosine similarity in the embedding index for two memories to be
-/// considered duplicate candidates.
-const DUPLICATE_COSINE_THRESHOLD: f32 = 0.95;
+/// considered duplicate candidates. Overridable via `BITURBO_DEDUP_COSINE`
+/// so deployments can tighten auto-merge (#443).
+fn duplicate_cosine_threshold() -> f32 {
+    std::env::var("BITURBO_DEDUP_COSINE")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(0.95)
+}
 /// Minimum token-set Jaccard similarity for the two texts to be merged. This
 /// guards against near-duplicate-but-distinct memories that score highly in
 /// embedding space but differ in meaning (e.g. "staging" vs "production").
-const MIN_TOKEN_SIMILARITY: f32 = 0.85;
+/// Overridable via `BITURBO_DEDUP_TOKEN_SIMILARITY`.
+fn min_token_similarity() -> f32 {
+    std::env::var("BITURBO_DEDUP_TOKEN_SIMILARITY")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(0.85)
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConsolidateReport {
     pub decayed: usize,
@@ -222,7 +236,7 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
                 let a = &rows[i];
                 let hits = idx.search(vec, 5, None)?;
                 for h in hits {
-                    if h.score < DUPLICATE_COSINE_THRESHOLD || h.uid == a.0 {
+                    if h.score < duplicate_cosine_threshold() || h.uid == a.0 {
                         continue;
                     }
                     if let Some(b) = by_uid.get(h.uid.as_str()) {
@@ -232,7 +246,7 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
                             (b.0.clone(), a.0.clone())
                         };
                         let similarity = token_jaccard_similarity(&a.1, &b.1);
-                        if similarity < MIN_TOKEN_SIMILARITY {
+                        if similarity < min_token_similarity() {
                             continue;
                         }
                         dupes.insert((keep, drop_));
