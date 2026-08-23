@@ -36,7 +36,7 @@ export function Settings() {
   const [launchOnBoot, setLaunchOnBoot] = useState(false);
   const [bootLoading, setBootLoading] = useState(true);
   const [bootSaving, setBootSaving] = useState(false);
-  const [mcpInstalling, setMcpInstalling] = useState<string | null>(null);
+  const [mcpInstalling, setMcpInstalling] = useState<Set<string>>(new Set());
   const [mcpInstalled, setMcpInstalled] = useState<Set<string>>(new Set());
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; available: boolean } | null>(null);
@@ -206,7 +206,7 @@ ${end}`;
   ] as const;
 
   async function installMcp(target: string, label: string) {
-    setMcpInstalling(target);
+    setMcpInstalling((s) => new Set(s).add(target));
     try {
       const res = await api.installMcpConfig(target);
       showToast({
@@ -217,7 +217,11 @@ ${end}`;
     } catch (e) {
       showToast({ kind: "err", text: `Failed to install ${label}: ${e}` });
     } finally {
-      setMcpInstalling(null);
+      setMcpInstalling((s) => {
+        const n = new Set(s);
+        n.delete(target);
+        return n;
+      });
     }
   }
 
@@ -410,13 +414,13 @@ ${end}`;
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {mcpTargets.map((t) => {
-              const installing = mcpInstalling === t.id;
+              const installing = mcpInstalling.has(t.id);
               const installed = mcpInstalled.has(t.id);
               return (
                 <button
                   key={t.id}
                   onClick={() => installMcp(t.id, t.label)}
-                  disabled={installing}
+                  disabled={mcpInstalling.size > 0}
                   className={clsx(
                     "btn-outline inline-flex items-center gap-1.5 text-xs",
                     installed && "border-accent/50 bg-accent-soft",
