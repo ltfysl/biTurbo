@@ -156,7 +156,7 @@ export interface CodeToken {
 export function tokenizeCode(line: string): CodeToken[] {
   const tokens: CodeToken[] = [];
   const pattern =
-    /(\/\/.*$|#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)|(\s+)|(.)/g;
+    /(\/\/.*$|^\s*#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)|(\s+)|(.)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(line))) {
     const [, comment, str, num, word, space, other] = match;
