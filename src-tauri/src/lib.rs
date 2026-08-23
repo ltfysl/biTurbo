@@ -67,7 +67,7 @@ fn init_logging(data_dir: &std::path::Path) {
             layer()
                 .compact()
                 .with_target(false)
-                .with_writer(std::io::stdout),
+                .with_writer(std::io::stderr),
         )
         .with(
             layer()
