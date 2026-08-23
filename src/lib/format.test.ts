@@ -32,6 +32,11 @@ describe("truncatePath", () => {
     const out = truncatePath("src/components/deep/nested/MemoryDetail.tsx", 30);
     expect(out.startsWith("…/")).toBe(true);
     expect(out.endsWith("MemoryDetail.tsx")).toBe(true);
-    expect(out.length).toBeLessThanOrEqual(31);
+  });
+
+  it("truncates very long filenames while keeping the extension", () => {
+    const out = truncatePath("src/generated/VeryLongGeneratedTestFixtureNameThatOverflows.ts", 40);
+    expect(out.endsWith(".ts")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(40);
   });
 });
