@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types --no-warnings
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { findBinary } from "./mcp-common.ts";
 
 type RpcId = number;
 interface RpcResponse { jsonrpc: "2.0"; id: RpcId; result?: unknown; error?: { code: number; message: string }; }
@@ -66,6 +66,10 @@ function extractText(result: unknown): string {
   const r = result as { content?: Array<{ type: string; text?: string }> };
   if (!Array.isArray(r.content)) return "";
   return r.content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text!).join("\n");
+}
+
+function extractJson<T>(result: unknown): T {
+  return JSON.parse(extractText(result)) as T;
 }
 
 function countTokens(text: string): number {
@@ -157,8 +161,7 @@ const TEST_MEMORIES = [
 ];
 
 async function main() {
-  const bin = process.argv[2] ?? resolve(process.cwd(), "src-tauri/target/debug/biturbo-mcp.exe");
-  if (!existsSync(bin)) { console.error(`${COL.red}Binary not found${COL.reset}`); process.exit(1); }
+  const bin = process.argv[2] ?? findBinary();
 
   console.log(`${COL.bold}${COL.cyan}=== Context Budget Profiler ===${COL.reset}\n`);
 
@@ -169,22 +172,36 @@ async function main() {
     await client.initialize();
     await client.callTool("create_project", { id: projectId, name: "Profiler", description: "Context budget analysis" });
     console.log(`${COL.dim}Created project: ${projectId}${COL.reset}\n`);
-
     // Seed memories
+    let seeded = 0;
+    const seedFailures: string[] = [];
     for (const mem of TEST_MEMORIES) {
-      await client.callTool("remember", {
-        content: mem.content,
-        mem_type: mem.mem_type,
-        project_id: projectId,
-        tags: mem.tags,
-        importance: mem.importance,
-        source_agent: "profiler",
-        file_path: (mem as any).file_path,
-        start_line: (mem as any).start_line,
-        end_line: (mem as any).end_line,
-      });
+      const loc = mem as { file_path?: string | null; start_line?: number; end_line?: number };
+      try {
+        const r = await client.callTool("remember", {
+          content: mem.content,
+          mem_type: mem.mem_type,
+          project_id: projectId,
+          tags: mem.tags,
+          importance: mem.importance,
+          source_agent: "profiler",
+          file_path: loc.file_path,
+          start_line: loc.start_line,
+          end_line: loc.end_line,
+        });
+        const j = extractJson<{ uid?: string }>(r);
+        if (j?.uid) seeded++;
+        else seedFailures.push(`no uid in response for: ${mem.content.slice(0, 40)}…`);
+      } catch (e) {
+        seedFailures.push(`${e instanceof Error ? e.message : String(e)} (content: ${mem.content.slice(0, 40)}…)`);
+      }
     }
-    console.log(`${COL.green}✓ Seeded ${TEST_MEMORIES.length} memories${COL.reset}\n`);
+    console.log(`${seeded === TEST_MEMORIES.length ? COL.green : COL.yellow}✓ Seeded ${seeded}/${TEST_MEMORIES.length} memories${COL.reset}`);
+    if (seedFailures.length > 0) {
+      console.log(`${COL.yellow}  Seed failures (${seedFailures.length}):${COL.reset}`);
+      seedFailures.slice(0, 10).forEach((f) => console.log(`  - ${f}`));
+    }
+    console.log("");
 
     // Test different k values
     const testCases = [
