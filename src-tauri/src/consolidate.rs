@@ -123,7 +123,7 @@ fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
                     let new_imp =
                         decayed_importance(base, created_at, now, access_count, last_access);
                     ((new_imp - importance as f32).abs() > 0.001)
-                        .then(|| (uid, new_imp))
+                        .then_some((uid, new_imp))
                 })
                 .collect(),
             None => stmt
@@ -134,7 +134,7 @@ fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
                     let new_imp =
                         decayed_importance(base, created_at, now, access_count, last_access);
                     ((new_imp - importance as f32).abs() > 0.001)
-                        .then(|| (uid, new_imp))
+                        .then_some((uid, new_imp))
                 })
                 .collect(),
         };
