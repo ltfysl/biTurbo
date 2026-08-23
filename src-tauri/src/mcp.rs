@@ -544,7 +544,7 @@ fn format_context_block(hits: &[MemoryWithScore]) -> String {
     // Deduplicate near-identical memories before formatting
     let deduped = deduplicate_hits(hits, 0.55);
 
-    let mut s = String::from("<ctx>\n");
+    let mut s = String::from("<biTurboContext>\n");
     for (i, h) in deduped.iter().enumerate() {
         let tc = type_code(&h.memory.mem_type);
         let tags = h.memory.tags.join(",");
@@ -576,7 +576,7 @@ fn format_context_block(hits: &[MemoryWithScore]) -> String {
             break;
         }
     }
-    s.push_str("</ctx>");
+    s.push_str("</biTurboContext>");
     s
 }
 
@@ -591,7 +591,7 @@ const SCHEMAS_JSON: &str = r#"[
 {"name":"get_memory","description":"Fetch one memory by uid.","inputSchema":{"type":"object","required":["uid"],"properties":{"uid":{"type":"string"}}}},
 {"name":"search","description":"Semantic search. Pass project_id or root_path (reads .biTurbo). mem_type filters. k=top-N (default 10).","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"list","description":"List memories with optional filters. Newest first. Default 50.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"},"mem_type":{"type":"string"},"limit":{"type":"number"},"offset":{"type":"number"}}}},
-{"name":"list_tags","description":"List tags for a project with usage counts. Newest first.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"}},"required":["project_id"]}},
+{"name":"list_tags","description":"Map tags to usage counts, sorted descending by count.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"}}}},
 {"name":"recall_for_context","description":"Build a <biTurboContext> block of top-k relevant memories. Pass project_id or root_path (reads .biTurbo).","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"recall_explain","description":"Recall ranked memories with source ranks, matched terms, feedback boost, and a recall id.","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"submit_recall_feedback","description":"Record useful or not-useful feedback for one recalled memory.","inputSchema":{"type":"object","required":["recall_id","memory_uid","value"],"properties":{"recall_id":{"type":"string"},"memory_uid":{"type":"string"},"value":{"type":"number"},"source":{"type":"string"}}}},
@@ -613,3 +613,50 @@ const SCHEMAS_JSON: &str = r#"[
 {"name":"register_agent","description":"Register or update this agent's record. Call once per session.","inputSchema":{"type":"object","required":["name","kind"],"properties":{"name":{"type":"string"},"kind":{"type":"string"},"meta":{"type":"object"}}}},
 {"name":"get_project_name_from_file","description":"Read projectName from .biTurbo file in project root. Returns {\"projectName\": \"...\"} or {\"error\": \"...\"}.","inputSchema":{"type":"object","required":["root_path"],"properties":{"root_path":{"type":"string"}}}}
 ]"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_context_block_wraps_hits_in_biturbo_context_tag() {
+        let hit = MemoryWithScore {
+            memory: Memory {
+                uid: "uid".into(),
+                project_id: "p".into(),
+                mem_type: "fact".into(),
+                content: "content".into(),
+                tags: vec!["t".into()],
+                source_agent: None,
+                importance: 0.5,
+                supersedes: None,
+                superseded_by: None,
+                created_at: 0,
+                updated_at: 0,
+                last_access: 0,
+                access_count: 0,
+                file_path: None,
+                start_line: None,
+                end_line: None,
+                language: None,
+            },
+            score: 1.0,
+        };
+        let out = format_context_block(&[hit]);
+        assert!(out.starts_with("<biTurboContext>"), "unexpected opening tag: {out}");
+        assert!(out.ends_with("</biTurboContext>"), "unexpected closing tag: {out}");
+    }
+
+    #[test]
+    fn list_tags_schema_has_optional_project_id() {
+        assert!(SCHEMAS_JSON.contains("\"list_tags\""));
+        assert!(
+            SCHEMAS_JSON.contains("Map tags to usage counts, sorted descending by count."),
+            "list_tags description should match actual sorting"
+        );
+        assert!(
+            !SCHEMAS_JSON.contains("List tags for a project with usage counts. Newest first."),
+            "old list_tags description should be gone"
+        );
+    }
+}
