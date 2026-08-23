@@ -70,6 +70,7 @@ interface AppStore {
   memoryOffset: number;
   hasMoreMemories: boolean;
   memoriesLoading: boolean;
+  isLoadingMore: boolean;
   loadMoreMemories: () => Promise<void>;
   refreshMemories: () => Promise<void>;
 
@@ -200,23 +201,34 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   memoryOffset: 0,
   hasMoreMemories: false,
+  isLoadingMore: false,
   loadMoreMemories: async () => {
+    if (get().isLoadingMore) return;
+    const projectId = get().currentProjectId;
     const offset = get().memoryOffset;
-    const batch = await api.listMemories({
-      project_id: get().currentProjectId,
-      limit: 50,
-      offset,
-    });
-    set((s) => {
-      const combined = [...s.memories, ...batch];
-      // Cap frontend memory usage: keep the newest 500 memories.
-      const trimmed = combined.length > 500 ? combined.slice(-500) : combined;
-      return {
-        memories: trimmed,
-        memoryOffset: offset + batch.length,
-        hasMoreMemories: batch.length === 50,
-      };
-    });
+    set({ isLoadingMore: true });
+    try {
+      const batch = await api.listMemories({
+        project_id: projectId,
+        limit: 50,
+        offset,
+      });
+      // Ignore stale results if the user switched projects while the page
+      // was in flight.
+      if (get().currentProjectId !== projectId) return;
+      set((s) => {
+        const combined = [...s.memories, ...batch];
+        // Cap frontend memory usage: keep the newest 500 memories.
+        const trimmed = combined.length > 500 ? combined.slice(-500) : combined;
+        return {
+          memories: trimmed,
+          memoryOffset: offset + batch.length,
+          hasMoreMemories: batch.length === 50,
+        };
+      });
+    } finally {
+      set({ isLoadingMore: false });
+    }
   },
   refreshMemories: async () => {
     set({ memoriesLoading: true });
@@ -306,20 +318,28 @@ export const useApp = create<AppStore>((set, get) => ({
 
   confirmState: null,
   confirm: (opts) => {
-    set({ confirmState: opts });
     return new Promise<boolean>((resolve) => {
-      registerConfirmResolver(resolve);
+      _confirmQueue.push({ opts, resolve });
+      if (_confirmQueue.length === 1) {
+        set({ confirmState: opts });
+      }
     });
   },
   resolveConfirm: () => {
-    const r = takeConfirmResolver();
-    r?.(true);
-    set({ confirmState: null });
+    const current = _confirmQueue.shift();
+    if (current) {
+      current.resolve(true);
+      const next = _confirmQueue[0]?.opts ?? null;
+      set({ confirmState: next });
+    }
   },
   cancelConfirm: () => {
-    const r = takeConfirmResolver();
-    r?.(false);
-    set({ confirmState: null });
+    const current = _confirmQueue.shift();
+    if (current) {
+      current.resolve(false);
+      const next = _confirmQueue[0]?.opts ?? null;
+      set({ confirmState: next });
+    }
   },
 
   contextMenu: null,
@@ -327,19 +347,12 @@ export const useApp = create<AppStore>((set, get) => ({
   closeContextMenu: () => set({ contextMenu: null }),
 }));
 
-// The pending confirm resolver lives outside zustand state on purpose:
+// Pending confirm queue lives outside zustand state on purpose:
 // if it lived in state, every confirm-related state change would
 // re-render every subscriber, even those that only care about other
-// state. With a module-local slot, only the modal itself re-renders.
-let _pendingConfirmResolver: ((ok: boolean) => void) | null = null;
-function registerConfirmResolver(r: (ok: boolean) => void) {
-  _pendingConfirmResolver = r;
-}
-function takeConfirmResolver(): ((ok: boolean) => void) | null {
-  const r = _pendingConfirmResolver;
-  _pendingConfirmResolver = null;
-  return r;
-}
+// state. With a queue, multiple await-confirm callers resolve in FIFO
+// order and the modal only re-renders when the visible prompt changes.
+let _confirmQueue: { opts: ConfirmOptions; resolve: (ok: boolean) => void }[] = [];
 
 /**
  * Imperative confirm helper. Resolves to true on confirm, false on
