@@ -149,6 +149,13 @@ function ProjectList() {
     if (!ok) return;
     try {
       await api.deleteProject(id);
+      // Switch away from a deleted project before refreshing so scoped
+      // views and filters never operate on a dead id.
+      if (id === currentProjectId) {
+        const remaining = projects.filter((p) => p.id !== id);
+        const fallback = remaining.find((p) => p.id === "default")?.id ?? remaining[0]?.id ?? "default";
+        setCurrentProjectId(fallback);
+      }
       await Promise.all([refreshProjects(), refreshStats(), refreshGraph().catch(() => {})]);
       showToast({ kind: "ok", text: "Deleted" });
     } catch (e) {
