@@ -500,7 +500,7 @@ const tests: TestCase[] = [
   {
     name: "get_project_name_from_file",
     tool: "get_project_name_from_file",
-    args: { root_path: "/nonexistent/path" },
+    args: { root_path: EMPTY_INGEST_ROOT },
     expect: (r) => {
       const j = extractJson(r);
       return (j !== null && typeof j === "object") || "get_project_name_from_file did not return an object";
