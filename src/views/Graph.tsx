@@ -419,7 +419,7 @@ export function Graph() {
             onMouseMoveHover(e);
           }}
           onMouseUp={onMouseUp}
-          onMouseLeave={onMouseUp}
+          onMouseLeave={() => { onMouseUp(); setHover(null); setHoverPos(null); }}
           onClick={onClick}
           onContextMenu={onContextMenu}
         />
