@@ -239,18 +239,21 @@ pub fn update(state: &AppState, uid: &str, input: UpdateInput) -> BiResult<Memor
         .content
         .clone()
         .unwrap_or_else(|| existing.content.clone());
+    if new_content.trim().is_empty() {
+        return Err(BiError::Invalid("content is empty".into()));
+    }
     let new_type = match input.mem_type.clone() {
         Some(mem_type) => MemType::from_str(&mem_type)?.as_str().to_string(),
         None => existing.mem_type.clone(),
-    };
-    let new_tags_json = match input.tags.clone() {
-        Some(t) => serde_json::to_string(&t)?,
-        None => serde_json::to_string(&existing.tags)?,
     };
     let new_imp = input
         .importance
         .unwrap_or(existing.importance)
         .clamp(0.0, 1.0);
+    let new_tags_json = match input.tags.clone() {
+        Some(t) => serde_json::to_string(&t)?,
+        None => serde_json::to_string(&existing.tags)?,
+    };
 
     state.db.write(|tx| {
         tx.execute(
@@ -558,12 +561,12 @@ pub fn count_by_type(state: &AppState, project_id: Option<&str>) -> BiResult<Vec
     let conn = state.db.conn()?;
     let (sql, p): (String, Vec<Box<dyn rusqlite::ToSql>>) = match project_id {
         Some(pid) => (
-            "SELECT mem_type, COUNT(*) FROM memories WHERE project_id = ?1 GROUP BY mem_type"
+            "SELECT mem_type, COUNT(*) FROM memories WHERE project_id = ?1 AND superseded_by IS NULL GROUP BY mem_type"
                 .to_string(),
             vec![Box::new(pid.to_string())],
         ),
         None => (
-            "SELECT mem_type, COUNT(*) FROM memories GROUP BY mem_type".to_string(),
+            "SELECT mem_type, COUNT(*) FROM memories WHERE superseded_by IS NULL GROUP BY mem_type".to_string(),
             vec![],
         ),
     };
@@ -828,6 +831,75 @@ mod search_tests {
         assert!(!index.contains_uid(&old.uid));
         assert!(index.contains_uid(&new.uid));
         assert_eq!(index.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn update_rejects_empty_content() {
+        let dir = std::env::temp_dir().join(format!(
+            "biturbo-update-empty-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let state = AppState::open(&dir).unwrap();
+        let mem = remember(
+            &state,
+            RememberInput {
+                content: "original".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let err = update(
+            &state,
+            &mem.uid,
+            UpdateInput {
+                content: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("content is empty"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn count_by_type_excludes_superseded() {
+        let dir = std::env::temp_dir().join(format!(
+            "biturbo-count-superseded-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let state = AppState::open(&dir).unwrap();
+        let old = remember(
+            &state,
+            RememberInput {
+                content: "old".into(),
+                mem_type: Some("fact".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        remember(
+            &state,
+            RememberInput {
+                content: "new".into(),
+                mem_type: Some("fact".into()),
+                supersedes: Some(old.uid),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let counts = count_by_type(&state, Some(&state.default_project_id)).unwrap();
+        let fact_count = counts
+            .iter()
+            .find(|(t, _)| t == "fact")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        assert_eq!(fact_count, 1, "superseded fact should not be counted");
         std::fs::remove_dir_all(dir).ok();
     }
 }
