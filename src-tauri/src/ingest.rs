@@ -264,6 +264,7 @@ pub fn ingest_project_controlled(
         .build()
     {
         match entry_result {
+            Ok(entry) if entry.file_type().is_some_and(|ft| ft.is_symlink()) => {}
             Ok(entry) if entry.path().is_file() => {
                 if detect_language(entry.path()).is_some() {
                     files.push(entry.path().to_path_buf());
