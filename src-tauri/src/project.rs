@@ -174,6 +174,8 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
         )?;
     fs2::FileExt::lock_exclusive(&lock)?;
     state.flush_all_indices();
+    crate::io::disable_watch(state, id)?;
+
     state.indices.write().remove(id);
     // Remove derived state first. If the process stops here, SQLite still
     // contains the project and startup repair deterministically rebuilds it.
