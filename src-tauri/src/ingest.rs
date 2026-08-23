@@ -1424,12 +1424,18 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
     }
 
     if chunks.is_empty() {
-        let cap = (lines.len() - 1).min(200);
-        chunks.push(Chunk {
-            code: lines[..=cap].join("\n"),
-            start_line: 1,
-            end_line: cap + 1,
-        });
+        // No chunk query matches (e.g. HTML): window the whole file into 200-line
+        // chunks so nothing is silently dropped (#246).
+        let mut start = 0;
+        while start < lines.len() {
+            let end = (start + 200).min(lines.len() - 1).max(start);
+            chunks.push(Chunk {
+                code: lines[start..=end].join("\n"),
+                start_line: start + 1,
+                end_line: end + 1,
+            });
+            start = end + 1;
+        }
     }
 
     chunks
