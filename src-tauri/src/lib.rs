@@ -77,9 +77,54 @@ fn init_logging(data_dir: &std::path::Path) {
         )
         .init();
 }
+fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
+    let data_dir = match dirs::data_dir() {
+        Some(d) => d.join("com.biturbo.app"),
+        None => {
+            tracing::error!("no data dir");
+            return None;
+        }
+    };
+    std::fs::create_dir_all(&data_dir).ok();
+    let lock_path = data_dir.join("biturbo.instance.lock");
+    let lock = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("cannot open instance lock at {}: {}", lock_path.display(), e);
+            return None;
+        }
+    };
+    match fs2::FileExt::try_lock_exclusive(&lock) {
+        Ok(()) => Some(lock),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            tracing::error!("biTurbo is already running");
+            None
+        }
+        Err(e) => {
+            tracing::error!("cannot lock instance lock: {}", e);
+            None
+        }
+    }
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _instance_guard: Option<std::fs::File> = if cfg!(desktop) {
+        let guard = try_acquire_single_instance_lock();
+        if guard.is_none() {
+            return;
+        }
+        guard
+    } else {
+        None
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
