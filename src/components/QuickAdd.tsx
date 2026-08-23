@@ -101,13 +101,13 @@ export function QuickAdd() {
       setFilePath("");
       setStartLine("");
       setOpen(false);
-      await refreshMemories();
-      await refreshStats();
       showToast({ kind: "ok", text: "Remembered" });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     } finally {
       setBusy(false);
+      await refreshMemories().catch(() => {});
+      await refreshStats().catch(() => {});
     }
   }
 
