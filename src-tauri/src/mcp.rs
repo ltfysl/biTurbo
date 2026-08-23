@@ -18,7 +18,7 @@ pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
     crate::operations::resume_pending(state.clone())?;
 
     let stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
+    let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
 
@@ -32,18 +32,33 @@ pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
         if trimmed.is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
-            Ok(req) => dispatch(&state, req).await,
-            Err(e) => json!({
-                "jsonrpc": "2.0",
-                "id": Value::Null,
-                "error": { "code": -32700, "message": format!("parse error: {e}") }
-            }),
-        };
-        let out = serde_json::to_string(&response).unwrap_or_default();
-        stdout.write_all(out.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+        match serde_json::from_str::<JsonRpcRequest>(trimmed) {
+            Ok(req) => {
+                let state = state.clone();
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    if let Some(response) = dispatch(state, req).await {
+                        let out = serde_json::to_string(&response).unwrap_or_default();
+                        let mut guard = stdout.lock().await;
+                        let _ = guard.write_all(out.as_bytes()).await;
+                        let _ = guard.write_all(b"\n").await;
+                        let _ = guard.flush().await;
+                    }
+                });
+            }
+            Err(e) => {
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": { "code": -32700, "message": format!("parse error: {e}") }
+                });
+                let out = serde_json::to_string(&response).unwrap_or_default();
+                let mut guard = stdout.lock().await;
+                guard.write_all(out.as_bytes()).await?;
+                guard.write_all(b"\n").await?;
+                guard.flush().await?;
+            }
+        }
     }
     Ok(())
 }
@@ -58,45 +73,43 @@ struct JsonRpcRequest {
     params: Value,
 }
 
-async fn dispatch(state: &Arc<AppState>, req: JsonRpcRequest) -> Value {
-    let id = req.id.clone().unwrap_or(Value::Null);
+async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
+    if req.id.is_none() {
+        return None;
+    }
+    let id = req.id.as_ref().unwrap();
     match req.method.as_str() {
-        "initialize" => {
-            let mut response = ok(
-                &id,
-                json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "## biTurbo Memory Layer — Instructions\n\nYou have access to biTurbo, a persistent semantic memory layer via MCP.\n\n## Core loop:\n1. **RECALL** — call `recall_for_context(query=<user msg>, project_id=<current>, k=8)`.\n2. **ANSWER** — respond using recalled context.\n3. **REMEMBER** — store only durable, useful information.\n\n## When to `remember`:\n- ✅ User states a fact about themselves/environment/project → `fact`\n- ✅ You make a decision with rationale → `decision`\n- ✅ User expresses a preference (style, verbosity, tools) → `preference`\n- ✅ User corrects you → `fact` with `supersedes`\n- ✅ You discover a codebase pattern → `pattern`\n- ✅ Something noteworthy happened → `episode`\n- ✅ Meta-observation about user or work → `reflection`\n- ❌ Transient state — don't remember\n- ❌ Public knowledge any LLM knows — don't remember\n- ❌ Secrets, tokens, PII — **NEVER**\n\nIf unsure: \"Would future-me in 6 months want to know this?\" If yes, remember.\n\n## Memory types:\n- `fact` — verifiable facts\n- `decision` — choices + why\n- `preference` — how user wants things\n- `pattern` — repeatable approaches\n- `episode` — past events (include timestamp)\n- `reflection` — meta-observations\n- `code` — set by ingest_project only\n\n## Importance (0-1):\n- 0.8-1.0: cross-project rules, key decisions\n- 0.5-0.7: typical (default 0.6)\n- 0.2-0.4: specific/stale details\n\n## Tags: 1-3 per memory. Good: `auth`, `ui`, `db`, `convention`, `api`. Bad: `important`, `todo`.\n\n## Session lifecycle:\n- START → `register_agent(name, kind)`, `list_projects()`\n- EVERY TURN → recall before non-trivial work\n- END → `consolidate(project_id)`, final `remember`\n\n## Multi-project:\n- Always pass `project_id`. Isolated per project.\n- `project_id=\"default\"` for cross-cutting facts.\n\n## Anti-patterns:\n- Don't dump 10k memories — use recall_for_context k=5-10\n- Don't skip recall for project-specific work — amnesia is worse than no tool\n- Don't remember the obvious (Cargo, Git, syntax)\n- Don't remember every response — memory quality matters more than volume\n- Don't forget prematurely — knowledge dies\n- Never cross-project leak — right project_id always\n- Never store secrets, tokens, PII\n\n## Tools (20):\nremember, forget, update, get_memory, search, list, list_tags,\nrecall_for_context, list_projects, get_project, create_project,\ndelete_project, ingest_project, consolidate, consolidate_status,\nget_project_name_from_file,\nstats, bootstrap, recent_activity, register_agent"
-                }),
-            );
-            response["result"]["instructions"] = Value::String(MCP_INSTRUCTIONS.into());
-            response
-        }
-        "notifications/initialized" => json!({}),
-        "tools/list" => ok(&id, json!({ "tools": tool_schemas() })),
+        "initialize" => Some(ok(
+            id,
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": MCP_INSTRUCTIONS,
+            }),
+        )),
+        "tools/list" => Some(ok(id, json!({ "tools": tool_schemas() }))),
         "tools/call" => {
             let params = req.params;
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            match call_tool(state, name, args).await {
-                Ok(content) => ok(&id, json!({ "content": content, "isError": false })),
-                Err(e) => ok(
-                    &id,
+            match call_tool(&state, name, args).await {
+                Ok(content) => Some(ok(id, json!({ "content": content, "isError": false }))),
+                Err(e) => Some(ok(
+                    id,
                     json!({
                         "content": [{ "type": "text", "text": format!("error: {e}") }],
                         "isError": true
                     }),
-                ),
+                )),
             }
         }
-        "ping" => ok(&id, json!({})),
-        _ => json!({
+        "ping" => Some(ok(id, json!({}))),
+        _ => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": { "code": -32601, "message": format!("method not found: {}", req.method) }
-        }),
+        })),
     }
 }
 
@@ -164,7 +177,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
         "list" => {
             let project_id = args.get("project_id").and_then(|v| v.as_str());
             let mem_type = args.get("mem_type").and_then(|v| v.as_str());
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.clamp(1, 500))
+                .unwrap_or(50) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let m: Vec<Memory> = memory::list(state, project_id, mem_type, limit, offset)?;
             text(&serde_json::to_string_pretty(&m)?)
@@ -311,8 +328,31 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
                 require_project(p)?;
             }
             let output_path = arg_str(&args, "output_path")?;
-            let r =
-                crate::io::export_memories(state, project_id, std::path::Path::new(&output_path))?;
+            if output_path.is_empty() {
+                return Err(BiError::Invalid("output_path cannot be empty".into()));
+            }
+            let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+            let exports_dir = state.data_dir.join("exports");
+            if std::path::Path::new(&output_path).is_absolute() {
+                return Err(BiError::Invalid("output_path must be a relative path".into()));
+            }
+            if std::path::Path::new(&output_path)
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(BiError::Invalid(
+                    "output_path must not contain '..' or special components".into(),
+                ));
+            }
+            let candidate = exports_dir.join(&output_path);
+            std::fs::create_dir_all(&exports_dir).ok();
+            if candidate.exists() && !overwrite {
+                return Err(BiError::Invalid(format!(
+                    "file already exists: {} (set overwrite=true to replace)",
+                    candidate.display()
+                )));
+            }
+            let r = crate::io::export_memories(state, project_id, &candidate)?;
             text(&serde_json::to_string_pretty(&r)?)
         }
         "enable_watch" => {
