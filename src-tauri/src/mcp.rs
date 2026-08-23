@@ -207,12 +207,23 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
         "submit_recall_feedback" => {
             let recall_id = arg_str(&args, "recall_id")?;
             let memory_uid = arg_str(&args, "memory_uid")?;
-            let value = args.get("value").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
-            let source = args
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("explicit");
-            crate::recall::submit_feedback(state, &recall_id, &memory_uid, value, source)?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| BiError::Invalid("missing value arg".into()))?;
+            if !matches!(value, -1 | 1) {
+                return Err(BiError::Invalid(format!(
+                    "value must be -1 or 1, got {value}"
+                )));
+            }
+            let value = value as i8;
+            let source = arg_str(&args, "source").unwrap_or_else(|_| "explicit".into());
+            if !matches!(source.as_str(), "explicit" | "implicit") {
+                return Err(BiError::Invalid(format!(
+                    "source must be explicit or implicit, got {source}"
+                )));
+            }
+            crate::recall::submit_feedback(state, &recall_id, &memory_uid, value, &source)?;
             text("{\"recorded\":true}")
         }
         "list_projects" => text(&serde_json::to_string_pretty(&project::list(state)?)?),
