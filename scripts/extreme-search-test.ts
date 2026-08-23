@@ -192,18 +192,32 @@ async function main() {
     const memories = generateDiverseMemories();
     console.log(`${COL.dim}Seeding ${memories.length} diverse memories...${COL.reset}`);
     const t0 = Date.now();
+    let seeded = 0;
+    const seedFailures: string[] = [];
     for (const mem of memories) {
-      await client.callTool("remember", {
-        content: mem.content,
-        mem_type: mem.mem_type,
-        project_id: projectId,
-        tags: mem.tags,
-        importance: mem.importance,
-        source_agent: "extreme-test",
-      });
+      try {
+        const r = await client.callTool("remember", {
+          content: mem.content,
+          mem_type: mem.mem_type,
+          project_id: projectId,
+          tags: mem.tags,
+          importance: mem.importance,
+          source_agent: "extreme-test",
+        });
+        const j = extractJson<{ uid?: string }>(r);
+        if (j?.uid) seeded++;
+        else seedFailures.push(`no uid in response for: ${mem.content.slice(0, 40)}…`);
+      } catch (e) {
+        seedFailures.push(`${e instanceof Error ? e.message : String(e)} (content: ${mem.content.slice(0, 40)}…)`);
+      }
     }
     const seedTime = Date.now() - t0;
-    console.log(`${COL.green}✓ Seeded ${memories.length} memories in ${(seedTime / 1000).toFixed(1)}s${COL.reset}\n`);
+    console.log(`${seeded === memories.length ? COL.green : COL.yellow}✓ Seeded ${seeded}/${memories.length} memories in ${(seedTime / 1000).toFixed(1)}s${COL.reset}`);
+    if (seedFailures.length > 0) {
+      console.log(`${COL.yellow}  Seed failures (${seedFailures.length}):${COL.reset}`);
+      seedFailures.slice(0, 10).forEach((f) => console.log(`  - ${f}`));
+    }
+    console.log("");
 
     let totalTests = 0;
     let passedTests = 0;
