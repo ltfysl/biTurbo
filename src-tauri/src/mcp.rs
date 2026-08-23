@@ -243,10 +243,20 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
                 root_path: args
                     .get("root_path")
                     .and_then(|v| v.as_str().map(String::from)),
-                bit_width: args
-                    .get("bit_width")
-                    .and_then(|v| v.as_u64())
-                    .map(|n| n as u8),
+                bit_width: {
+                    let value = args.get("bit_width").and_then(|v| v.as_u64());
+                    match value {
+                        Some(n) => Some(match u8::try_from(n) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                return Err(BiError::Invalid(format!(
+                                    "bit_width {n} is out of u8 range"
+                                )))
+                            }
+                        }),
+                        None => None,
+                    }
+                },
             };
             let p = project::create(state, input)?;
             text(&serde_json::to_string_pretty(&p)?)
