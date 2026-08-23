@@ -14,7 +14,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 type RpcId = number;
 interface RpcRequest {
@@ -66,7 +65,6 @@ const arg = (k: string, def?: string) => {
   const a = argv.find((x) => x.startsWith(`--${k}=`));
   return a ? a.split("=", 2)[1] : def;
 };
-const flag = (k: string) => argv.includes(`--${k}`);
 
 function findBinary(): string {
   const explicit = arg("bin");

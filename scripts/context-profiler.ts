@@ -162,6 +162,7 @@ const TEST_MEMORIES = [
 
 async function main() {
   const bin = process.argv[2] ?? findBinary();
+  if (!existsSync(bin)) { console.error(`${COL.red}Binary not found${COL.reset}`); process.exit(1); }
 
   console.log(`${COL.bold}${COL.cyan}=== Context Budget Profiler ===${COL.reset}\n`);
 

@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",
     "tauri": "tauri",
     "tauri:dev": "node scripts/ensure-sidecar-placeholder.mjs && tauri dev",
     "tauri:dev:wsl": "VITE_UI_ZOOM=1.75 npm run tauri:dev",
