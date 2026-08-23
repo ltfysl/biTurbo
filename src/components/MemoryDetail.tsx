@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Memory } from "../lib/types";
 import { MEM_TYPE_META, timeAgo, shortDate, importanceDots, truncatePath, stripLeadingPathComment, friendlyError } from "../lib/format";
 import { api } from "../lib/api";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { useApp, useConfirm } from "../lib/store";
 import { X, Trash2, Edit3, Save, FileCode2, Hash, ChevronDown, ChevronUp } from "lucide-react";
 import clsx from "clsx";
@@ -203,17 +204,28 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
             {expanded ? "Show less" : "Show more"}
           </button>
         )}
-
-        {/* Code location */}
         {memory.mem_type === "code" && memory.file_path && (
           <button
             type="button"
-            onClick={() => {
-              shellOpen(memory.file_path as string).catch((e) => {
-                showToast({ kind: "err", text: `Could not open file: ${String(e)}` });
-              });
+            onClick={async () => {
+              const p = memory.file_path as string;
+              try {
+                await openPath(p);
+              } catch (e) {
+                const msg = String(e);
+                // Fallback to unrestricted opener if scope blocks the path
+                if (msg.includes("Not allowed") || msg.includes("forbidden") || msg.includes("Forbidden")) {
+                  try {
+                    await invoke("open_file", { path: p });
+                    return;
+                  } catch (e2) {
+                    showToast({ kind: "err", text: `Could not open file: ${String(e2)}` });
+                    return;
+                  }
+                }
+                showToast({ kind: "err", text: `Could not open file: ${msg}` });
+              }
             }}
-            className="code-chip mt-3 w-full py-1.5 text-left text-[12px] transition hover:border-accent/50"
             title={`Open ${memory.file_path} in the default app`}
           >
             <FileCode2 size={12} className="shrink-0" />

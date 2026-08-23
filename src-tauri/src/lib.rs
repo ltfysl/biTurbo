@@ -82,8 +82,8 @@ fn init_logging(data_dir: &std::path::Path) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -145,6 +145,8 @@ pub fn run() {
             commands::list_agents,
             commands::register_agent,
             commands::recent_activity,
+            commands::open_file,
+            commands::reveal_file,
             commands::bootstrap,
             commands::resolve_mcp_binary_path,
             commands::install_mcp_config,

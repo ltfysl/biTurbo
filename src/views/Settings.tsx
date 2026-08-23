@@ -18,7 +18,7 @@ import {
   ArrowUpCircle,
 } from "lucide-react";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import clsx from "clsx";
 
@@ -265,12 +265,23 @@ ${end}`;
               {resolvedDataDir}
             </span>
             <button
-              onClick={() => {
-                shellOpen(resolvedDataDir).catch((e) => {
-                  showToast({ kind: "err", text: `Could not open folder: ${String(e)}` });
-                });
+              onClick={async () => {
+                try {
+                  await openPath(resolvedDataDir);
+                } catch (e) {
+                  const msg = String(e);
+                  if (msg.includes("Not allowed") || msg.includes("forbidden") || msg.includes("Forbidden")) {
+                    try {
+                      await invoke("open_file", { path: resolvedDataDir });
+                      return;
+                    } catch (e2) {
+                      showToast({ kind: "err", text: `Could not open folder: ${String(e2)}` });
+                      return;
+                    }
+                  }
+                  showToast({ kind: "err", text: `Could not open folder: ${msg}` });
+                }
               }}
-              className="btn-outline shrink-0 px-2 py-0.5 text-[11px]"
             >
               Open folder
             </button>

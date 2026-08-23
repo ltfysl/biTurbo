@@ -430,8 +430,22 @@ pub fn recent_activity(
     crate::application::recent_activity(state.inner(), limit.unwrap_or(100))
 }
 
-// ── MCP config auto-install ─────────────────────────────────────────────
+// ── File opener (unrestricted — bypasses opener scope for code locations) ──
+#[tauri::command]
+pub fn open_file(path: String) -> Result<(), String> {
+    let display = path.clone();
+    tauri_plugin_opener::open_path(path, Option::<String>::None)
+        .map_err(|e| format!("failed to open {display}: {e}"))
+}
 
+#[tauri::command]
+pub fn reveal_file(path: String) -> Result<(), String> {
+    let display = path.clone();
+    tauri_plugin_opener::reveal_item_in_dir(std::path::Path::new(&path))
+        .map_err(|e| format!("failed to reveal {display}: {e}"))
+}
+
+// ── MCP config auto-install ─────────────────────────────────────────────
 #[derive(Serialize)]
 pub struct ResolveMcpBinaryResult {
     pub path: String,
