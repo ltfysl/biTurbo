@@ -21,3 +21,16 @@
 - Local signed build (no notarization): `pnpm tauri:build`.
 - Unsigned build: `pnpm tauri build -- --no-sign`.
 - macOS notarized release build: `pnpm tauri:build:notarized` with `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), and `APPLE_TEAM_ID` exported.
+
+## Agent Working Rules
+
+- Recall project context with `recall_for_context(project_id="biturbo")` before non-trivial work.
+- Read this root `AGENTS.md` and the nearest per-folder `AGENTS.md` before editing.
+- Keep files small and focused: aim for <300 lines, split when a module does too much.
+- Reuse existing components, helpers, and types; do not duplicate patterns.
+- Outsource non-UI logic to `src/lib/` (frontend), shared Rust modules, or `scripts/`; keep UI components thin.
+- Follow existing conventions: React + Vite + Tailwind, Rust module layout, naming, error handling.
+- Add or update tests for meaningful behavior changes.
+- Update the relevant `AGENTS.md` when a folder's responsibilities change.
+- Never commit secrets, tokens, PII, or build artifacts.
+- Run lint, typecheck, `cargo clippy`, and tests before claiming completion.
