@@ -59,6 +59,7 @@ pub struct CreateProjectInput {
 pub fn create(state: &AppState, input: CreateProjectInput) -> BiResult<Project> {
     let id = input.id.unwrap_or_else(|| slugify(&input.name));
     validate_project_id(&id)?;
+    validate_project_name(&input.name)?;
     let bit_width = input.bit_width.unwrap_or(4);
     if !(2..=4).contains(&bit_width) {
         return Err(BiError::Invalid(format!(
@@ -313,6 +314,22 @@ pub fn validate_project_id(id: &str) -> BiResult<()> {
     }
 }
 
+/// Reject control characters and newlines in project names before they are
+/// interpolated into line-oriented `.biTurbo` marker files.
+pub fn validate_project_name(name: &str) -> BiResult<()> {
+    if name.is_empty() || name.len() > 128 {
+        return Err(BiError::Invalid(
+            "project name must be 1-128 characters".into(),
+        ));
+    }
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(BiError::Invalid(
+            "project name cannot contain control characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +366,15 @@ mod tests {
         assert!(validate_project_id(&ok).is_ok());
         let too_long = "a".repeat(65);
         assert!(validate_project_id(&too_long).is_err());
+    }
+
+    #[test]
+    fn project_names_with_control_chars_are_rejected() {
+        for bad in ["line1\nline2", "tab\there", "bell\x07"] {
+            assert!(validate_project_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_project_name("ok name").is_ok());
+        assert!(validate_project_name(&"a".repeat(128)).is_ok());
+        assert!(validate_project_name(&"a".repeat(129)).is_err());
     }
 }
