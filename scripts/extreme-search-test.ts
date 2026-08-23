@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types --no-warnings
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { findBinary } from "./mcp-common.ts";
 
 type RpcId = number;
 interface RpcResponse { jsonrpc: "2.0"; id: RpcId; result?: unknown; error?: { code: number; message: string }; }
@@ -170,7 +170,7 @@ function generateDiverseMemories() {
 }
 
 async function main() {
-  const bin = process.argv[2] ?? resolve(process.cwd(), "src-tauri/target/debug/biturbo-mcp.exe");
+  const bin = process.argv[2] ?? findBinary();
   if (!existsSync(bin)) { console.error(`${COL.red}Binary not found: ${bin}${COL.reset}`); process.exit(1); }
 
   console.log(`${COL.bold}${COL.cyan}=== EXTREME Search & Recall Quality Test ===${COL.reset}\n`);

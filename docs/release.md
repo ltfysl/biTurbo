@@ -29,7 +29,7 @@ If the tag already exists (e.g. `v0.1.0`), the script refuses to run. Bump the v
 
 | Target | Runner | Output |
 |--------|--------|--------|
-| Windows x64 | `windows-latest` | `.msi` installer |
+| Windows x64 | `windows-latest` | NSIS `.exe` setup installer |
 | macOS ARM | `macos-latest` | `.dmg` for Apple Silicon |
 | macOS Intel | `macos-latest` | `.dmg` for Intel Macs |
 
@@ -52,12 +52,15 @@ Add these in **Settings → Secrets and variables → Actions** in the GitHub re
 
 ## Manual release trigger
 
-You can also run the workflow manually from the GitHub Actions tab:
+The workflow can be dispatched manually from the GitHub Actions tab (**Actions →
+Release → Run workflow**), but a dispatch run from a branch is rejected by the
+pipeline's guard step — release builds only run from `v*` tag refs, since a
+branch dispatch would otherwise try to create a draft release tagged with the
+branch name. To test the pipeline end-to-end, push a real tag instead:
 
-1. Go to **Actions → Release → Run workflow**.
-2. Select the branch and click **Run workflow**.
-
-This is useful for testing the pipeline without creating a new tag.
+```sh
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
 
 ## Local builds
 
@@ -101,7 +104,7 @@ node scripts/ensure-sidecar-placeholder.mjs
 
 ### Tag already exists
 
-The release script refuses to create a tag if it already exists locally or on the remote. Bump the version in `package.json` and `src-tauri/tauri.conf.json` first.
+The release script refuses to create a tag if it already exists locally or on the remote. It also checks that `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` all share the same version. Fix any mismatch or bump the version in all four files and try again.
 
 ### macOS signing is skipped
 

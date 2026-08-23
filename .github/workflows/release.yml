@@ -33,6 +33,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — only build from version tags
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::Release builds must run from a v* tag ref (got: ${{ github.ref }})."
+          echo "::error::workflow_dispatch from a branch would tag the branch name. To test the pipeline, push a real tag:"
+          echo "::error::  git tag vX.Y.Z && git push origin vX.Y.Z"
+          exit 1
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.90.0
