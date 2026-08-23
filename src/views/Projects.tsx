@@ -242,7 +242,6 @@ export function Projects() {
       });
       setModelEdit(null);
     } catch (e) {
-conflict://2
       showToast({ kind: "err", text: friendlyError(e) });
     } finally {
       setModelSaving(false);
