@@ -60,6 +60,13 @@ pub fn create(state: &AppState, input: CreateProjectInput) -> BiResult<Project> 
     let id = input.id.unwrap_or_else(|| slugify(&input.name));
     validate_project_id(&id)?;
     validate_project_name(&input.name)?;
+    if let Some(ref root_path) = input.root_path {
+        if !std::path::Path::new(root_path).is_dir() {
+            return Err(BiError::Invalid(format!(
+                "root_path '{root_path}' does not exist or is not a directory"
+            )));
+        }
+    }
     let bit_width = input.bit_width.unwrap_or(4);
     if !(2..=4).contains(&bit_width) {
         return Err(BiError::Invalid(format!(
@@ -93,7 +100,7 @@ pub fn create(state: &AppState, input: CreateProjectInput) -> BiResult<Project> 
         let biturbo_file = std::path::PathBuf::from(root_path).join(".biTurbo");
         // Only write if file doesn't exist (skip/continue if it exists)
         if !biturbo_file.exists() {
-            let _ = std::fs::write(&biturbo_file, biturbo_file_content(&id, &input.name, now));
+            std::fs::write(&biturbo_file, biturbo_file_content(&id, &input.name, now))?;
         }
     }
 
