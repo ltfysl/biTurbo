@@ -3,12 +3,14 @@ use crate::error::{BiError, BiResult};
 use crate::state::AppState;
 use ignore::WalkBuilder;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use streaming_iterator::StreamingIterator;
 use tauri::Emitter;
@@ -18,6 +20,10 @@ use tree_sitter::{Language, Parser, Query, QueryCursor};
 const CHUNK_INSERT_BATCH: usize = 64;
 const PROGRESS_EVERY: usize = 16;
 const MAX_CHUNK_TEXT: usize = 4000;
+/// Files larger than this are skipped during ingest to bound memory (#239):
+/// tree-sitter parse trees dwarf source size and huge generated dumps would
+/// otherwise be fully buffered before rejection.
+const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 /// Group at most this many chunks into one INSERT statement to stay
 /// under SQLite's 32 766 bound-variable limit (15 params per chunk).
 const SQL_INSERT_CHUNK_LIMIT: usize = 2000;
@@ -33,6 +39,11 @@ static PARSE_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
         .build()
         .expect("parse thread pool")
 });
+
+/// Serialize ingests per project (#236): watch-triggered and manual/multi
+/// ingests must not race on shared stale-uid/edge computations.
+static PROJECT_INGEST_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IngestResult {
@@ -113,21 +124,39 @@ pub(crate) fn ensure_biturboignore(root: &Path) -> BiResult<bool> {
 
     let gitignore = root.join(".gitignore");
     if gitignore.exists() {
-        let gitignore_content = std::fs::read_to_string(&gitignore)
-            .map_err(|e| BiError::Ingest(format!("failed to read {}: {e}", gitignore.display())))?;
-        content.push_str("# --- copied from .gitignore ---\n");
-        content.push_str(&gitignore_content);
-        if !content.ends_with('\n') {
-            content.push('\n');
+        match std::fs::read_to_string(&gitignore) {
+            Ok(gitignore_content) => {
+                content.push_str("# --- copied from .gitignore ---\n");
+                content.push_str(&gitignore_content);
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+            }
+            Err(e) => {
+                // Non-fatal (#241): fall back to the stub instead of failing
+                // an ingest on a read-only or unreadable checkout.
+                tracing::warn!("failed to read {}: {e}", gitignore.display());
+                content.push_str("# Examples:\n");
+                content.push_str("# dist/\n# target/\n# generated/\n# **/*.snap\n");
+            }
         }
     } else {
         content.push_str("# Examples:\n");
         content.push_str("# dist/\n# target/\n# generated/\n# **/*.snap\n");
     }
 
-    std::fs::write(&biturboignore, content).map_err(|e| {
-        BiError::Ingest(format!("failed to write {}: {e}", biturboignore.display()))
-    })?;
+    // Temp file + atomic rename keeps concurrent first ingests race-safe
+    // (#241): rename either fully succeeds or leaves the old state intact.
+    let tmp = root.join(format!(".biturboignore.tmp.{}", uuid::Uuid::new_v4()));
+    let written =
+        std::fs::write(&tmp, &content).and_then(|_| std::fs::rename(&tmp, &biturboignore));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(BiError::Ingest(format!(
+            "failed to write {}: {e}",
+            biturboignore.display()
+        )));
+    }
 
     Ok(true)
 }
@@ -193,6 +222,16 @@ pub fn ingest_project_controlled(
     if !root.is_dir() {
         return Err(BiError::Ingest(format!("not a dir: {}", root.display())));
     }
+    // Per-project ingest serialization (#236).
+    let project_lock = {
+        let mut locks = PROJECT_INGEST_LOCKS.lock();
+        Arc::clone(
+            locks
+                .entry(project_id.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    };
+    let _project_guard = project_lock.lock();
     check_cancelled(state, operation_id)?;
     if let Some(id) = operation_id {
         crate::operations::update_progress(state, id, "scanning", 0, 1, None)?;
@@ -202,7 +241,11 @@ pub fn ingest_project_controlled(
         ..Default::default()
     };
 
-    ensure_biturboignore(root)?;
+    // Optional convenience file: failures (read-only checkout, lost race)
+    // must not abort the ingest (#241).
+    if let Err(e) = ensure_biturboignore(root) {
+        tracing::warn!("could not ensure .biturboignore: {e}");
+    }
 
     emit_progress(state, project_id, "scanning", 0, 1, None, 0);
 
@@ -214,7 +257,8 @@ pub fn ingest_project_controlled(
         .git_exclude(true)
         .ignore(true)
         .add_custom_ignore_filename(".biturboignore")
-        .hidden(false)
+        .max_filesize(Some(MAX_FILE_SIZE))
+        .filter_entry(is_vcs_meta_dir)
         .build()
         .filter_map(|r| r.ok())
         .filter(|e| e.path().is_file())
@@ -295,21 +339,17 @@ pub fn ingest_project_controlled(
     let mut import_sources: HashMap<String, Vec<String>> = HashMap::new();
     let mut changed_rels: Vec<String> = Vec::new();
     let mut changed_file_uids: Vec<String> = Vec::new();
-    let mut stale_file_uids: Vec<String> = Vec::new();
     let mut deleted_file_uids: Vec<String> = Vec::new();
     let mut changed_pfs: Vec<ParsedFile> = Vec::new();
-    let mut parse_error_rels: Vec<String> = Vec::new();
 
     for pf in parsed {
         current_rels.insert(pf.rel.clone());
         result.bytes_processed += pf.bytes;
 
         if let Some(e) = &pf.error {
+            // Transient per-file failure (#233): report it but leave the
+            // existing indexed_files row, chunks, vectors, and edges intact.
             result.errors.push(e.clone());
-            parse_error_rels.push(pf.rel.clone());
-            stale_file_uids.push(pf.file_uid.clone());
-            changed_file_uids.push(pf.file_uid.clone());
-            changed_pfs.push(pf);
             continue;
         }
 
@@ -356,14 +396,17 @@ pub fn ingest_project_controlled(
 
     let conn = state.db.conn()?;
     let mut stale_uids = Vec::new();
-    for rel in changed_rels.iter().chain(parse_error_rels.iter()) {
-        stale_uids.extend(db::code_uids_for_file(&conn, project_id, rel)?);
+    // Only ingest-minted chunk uids (`{project}::{rel}::S-E`) go stale on a
+    // changed/deleted file (#527); user-created code-type memories that merely
+    // share the file_path must survive.
+    for rel in &changed_rels {
+        stale_uids.extend(chunk_uids_for_rel(&conn, project_id, rel)?);
     }
     for rel in existing_files
         .keys()
         .filter(|rel| !current_rels.contains(*rel))
     {
-        stale_uids.extend(db::code_uids_for_file(&conn, project_id, rel)?);
+        stale_uids.extend(chunk_uids_for_rel(&conn, project_id, rel)?);
     }
     drop(conn);
 
@@ -457,13 +500,11 @@ pub fn ingest_project_controlled(
         }
         db::delete_memories_by_uids(tx, &stale_uids)?;
         db::delete_code_edges_for_files(tx, project_id, &changed_file_uids)?;
-        db::delete_code_edges_for_files(tx, project_id, &stale_file_uids)?;
         db::delete_code_edges_for_files(tx, project_id, &deleted_file_uids)?;
 
         for rel in existing_files
             .keys()
             .filter(|rel| !current_rels.contains(*rel))
-            .chain(parse_error_rels.iter())
         {
             db::delete_indexed_file(tx, project_id, rel)?;
         }
@@ -590,6 +631,46 @@ fn check_cancelled(state: &AppState, operation_id: Option<&str>) -> BiResult<()>
     Ok(())
 }
 
+/// Prune VCS-internal directories from walks (#230). `.hidden(false)` had
+/// disabled the walker's only dot-directory filter, so every ingest descended
+/// into `.git` object stores. Kept explicit so `.jj` gets parity even if the
+/// hidden filter is ever toggled again.
+fn is_vcs_meta_dir(entry: &ignore::DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_dir())
+        && matches!(entry.file_name().to_str(), Some(".git") | Some(".jj"))
+}
+
+/// Collect only ingest-minted chunk UIDs for a file (`{project}::{rel}::S-E`),
+/// never user-created `code` memories that merely share the file_path (#527).
+/// NOTE: validating/clamping start_line/end_line on user remembers lives in
+/// memory::remember — TODO(other-slice).
+fn chunk_uids_for_rel(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    rel: &str,
+) -> BiResult<Vec<String>> {
+    let prefix = format!("{project_id}::{rel}::");
+    let pattern = format!(
+        "{}%",
+        prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    let mut stmt = conn.prepare(
+        "SELECT uid FROM memories
+         WHERE project_id = ?1 AND mem_type = 'code' AND uid LIKE ?2 ESCAPE '\\'",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![project_id, pattern], |r| {
+        r.get::<_, String>(0)
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 /// Ingest multiple projects sequentially. Per-project parsing still uses a
 /// capped Rayon pool, but project-level parallelism causes ONNX/CPU contention
 /// and large memory spikes.
@@ -635,6 +716,17 @@ pub fn ingest_multiple_projects(
 
 pub fn get_project_graph(state: &AppState, project_id: &str) -> BiResult<GraphData> {
     let conn = state.db.conn()?;
+    // Reconstruct rel paths against the stored project root (#231): chunks
+    // persist absolute file_path values, while edge/file UIDs are rel-based.
+    let project_root: String = conn
+        .query_row(
+            "SELECT root_path FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
 
@@ -683,7 +775,16 @@ pub fn get_project_graph(state: &AppState, project_id: &str) -> BiResult<GraphDa
     }
 
     for (file_path, members) in &by_file {
-        let file_uid = format!("{project_id}::file::{}", file_path.trim_start_matches('/'));
+        let rel = if project_root.is_empty() {
+            file_path.trim_start_matches('/').to_string()
+        } else {
+            Path::new(file_path)
+                .strip_prefix(&project_root)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_path.clone())
+        };
+        let file_uid = format!("{project_id}::file::{rel}");
         let short = file_path
             .rsplit('/')
             .next()
@@ -988,6 +1089,21 @@ fn parse_one_file(
         error: None,
     };
 
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_FILE_SIZE => {
+            pf.error = Some(format!(
+                "{}: file exceeds {} byte ingest limit",
+                path.display(),
+                MAX_FILE_SIZE
+            ));
+            return pf;
+        }
+        Err(e) => {
+            pf.error = Some(format!("{}: unreadable ({e})", path.display()));
+            return pf;
+        }
+        Ok(_) => {}
+    }
     let mut bytes = Vec::new();
     if std::fs::File::open(path)
         .and_then(|mut file| file.read_to_end(&mut bytes))
@@ -1315,7 +1431,10 @@ fn import_query_src(lang: &str) -> Option<&'static str> {
             r#"
             (import_statement source: (string) @imp)
             (export_statement source: (string) @imp)
-            (call_expression function: (identifier) @fn arguments: (arguments (string) @imp))
+            (call_expression
+              function: (identifier) @fn
+              arguments: (arguments (string) @imp)
+              (#eq? @fn "require"))
         "#
         }
         "python" => {
@@ -1453,14 +1572,27 @@ fn resolve_import(
         .trim_start_matches("super::");
 
     if import.starts_with("./") || import.starts_with("../") || import.starts_with('/') {
-        let base = if import.starts_with('/') {
-            root.to_path_buf()
+        // Count leading '../' segments and pop that many components from the
+        // importing directory (#237); trim_start_matches('.') collapsed parent
+        // traversal and mis-resolved every ../ import.
+        let (base, rest) = if let Some(stripped) = import.strip_prefix('/') {
+            (root.to_path_buf(), stripped)
         } else {
-            from_file.parent()?.to_path_buf()
+            let mut ups = 0usize;
+            let mut remainder = import;
+            while let Some(tail) = remainder.strip_prefix("../") {
+                remainder = tail;
+                ups += 1;
+            }
+            let remainder = remainder.strip_prefix("./").unwrap_or(remainder);
+            let mut base = from_file.parent()?.to_path_buf();
+            for _ in 0..ups {
+                base = base.parent()?.to_path_buf();
+            }
+            (base, remainder)
         };
-        let candidate = base.join(import.trim_start_matches('.').trim_start_matches('/'));
-        let candidates = expand_candidates(&candidate);
-        for c in candidates {
+        let candidate = base.join(rest);
+        for c in expand_candidates(&candidate) {
             if c.exists() {
                 let rel = c.strip_prefix(root).ok()?.to_string_lossy().to_string();
                 return Some(rel);
@@ -1520,6 +1652,7 @@ fn build_structure_summary(root: &Path) -> BiResult<String> {
         .git_exclude(true)
         .ignore(true)
         .hidden(true)
+        .filter_entry(is_vcs_meta_dir)
         .build()
         .filter_map(|r| r.ok())
     {
