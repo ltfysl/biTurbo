@@ -81,6 +81,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   }, [memory.updated_at, editing]);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const hits = await api.search({
@@ -88,16 +89,20 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           query: memory.content.slice(0, 200),
           k: 6,
         });
+        if (cancelled) return;
         setRelated(
           hits
             .filter((h) => h.uid !== memory.uid)
             .slice(0, 5)
-            .map((h) => ({ uid: h.uid, content: h.content, score: h.score }))
+            .map((h) => ({ uid: h.uid, content: h.content, score: h.score })),
         );
       } catch {
         /* ignore */
       }
     })();
+    return () => {
+      cancelled = true;
+    };
     // Only re-search when selecting a different memory, not on every edit.
   }, [memory.uid, memory.project_id]);
 
