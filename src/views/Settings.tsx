@@ -187,11 +187,14 @@ ${end}`;
   }
 
   function copy(label: string, text: string) {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(label);
-      showToast({ kind: "ok", text: `Copied ${label}` });
-      setTimeout(() => setCopied(null), 1500);
-    });
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(label);
+        showToast({ kind: "ok", text: `Copied ${label}` });
+        setTimeout(() => setCopied(null), 1500);
+      })
+      .catch(() => showToast({ kind: "err", text: "Clipboard blocked" }));
   }
 
   const mcpTargets = [
