@@ -352,7 +352,7 @@ export const useApp = create<AppStore>((set, get) => ({
 // re-render every subscriber, even those that only care about other
 // state. With a queue, multiple await-confirm callers resolve in FIFO
 // order and the modal only re-renders when the visible prompt changes.
-let _confirmQueue: { opts: ConfirmOptions; resolve: (ok: boolean) => void }[] = [];
+const _confirmQueue: { opts: ConfirmOptions; resolve: (ok: boolean) => void }[] = [];
 
 /**
  * Imperative confirm helper. Resolves to true on confirm, false on
@@ -370,7 +370,7 @@ export function useContextMenu() {
 
 if (typeof window !== "undefined") {
   applyThemeToDom(readStoredTheme());
-  let unlistens: UnlistenFn[] = [];
+  const unlistens: UnlistenFn[] = [];
   void (async () => {
     unlistens.push(
       await listen<IngestProgress>("ingest:progress", (e) => {
