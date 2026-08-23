@@ -41,9 +41,24 @@ if (fromEnv != null && String(fromEnv).length > 0) {
   }
 }
 
-const raw = localStorage.getItem(ZOOM_KEY) ?? fromEnv;
-const uiZoom = Number(raw);
-if (Number.isFinite(uiZoom) && uiZoom > 0) {
+let uiZoom: number | undefined;
+try {
+  const raw = localStorage.getItem(ZOOM_KEY) ?? fromEnv;
+  if (raw != null && String(raw).length > 0) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      uiZoom = n;
+    }
+  }
+} catch {
+  if (fromEnv != null && String(fromEnv).length > 0) {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n > 0) {
+      uiZoom = n;
+    }
+  }
+}
+if (uiZoom != null) {
   applyUiZoom(uiZoom);
 }
 
