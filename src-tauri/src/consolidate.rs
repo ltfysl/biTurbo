@@ -89,79 +89,63 @@ fn decayed_importance(
 
 fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
     let now = chrono::Utc::now().timestamp_millis();
-    let conn = state.db.conn()?;
-
-    let rows: Vec<(String, f64, Option<f64>, i64, i64, i64)> = match project_id {
-        Some(p) => {
-            let mut stmt = conn.prepare(
+    // Read, compute, and write inside ONE transaction (#450): computing the
+    // deltas outside let a concurrent remember/update between the read and
+    // the write be silently clobbered by the stale decay value.
+    state.db.write(|tx| {
+        let select_sql = match project_id {
+            Some(_) => {
                 "SELECT uid, importance, decay_base, created_at, access_count, last_access
-                 FROM memories WHERE project_id = ?1",
-            )?;
-            let v: Vec<_> = stmt
-                .query_map(rusqlite::params![p], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, f64>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, i64>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, i64>(5)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            v
-        }
-        None => {
-            let mut stmt = conn.prepare(
-                "SELECT uid, importance, decay_base, created_at, access_count, last_access
-                 FROM memories",
-            )?;
-            let v: Vec<_> = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, f64>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, i64>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, i64>(5)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            v
-        }
-    };
-    // Compute new importances first, then apply every change inside ONE
-    // transaction with a cached statement — previously each row was its own
-    // autocommit transaction.
-    let mut updates: Vec<(String, f32)> = Vec::new();
-    for (uid, importance, decay_base, created_at, access_count, last_access) in rows {
-        // Effective baseline: rows predating the decay_base backfill fall back
-        // to the stored importance.
-        let base = decay_base.unwrap_or(importance);
-        let new_imp = decayed_importance(base, created_at, now, access_count, last_access);
-        if (new_imp - importance as f32).abs() > 0.001 {
-            updates.push((uid, new_imp));
-        }
-    }
-    drop(conn);
-
-    let touched = updates.len();
-    if !updates.is_empty() {
-        state.db.write(|tx| {
-            let mut stmt =
-                tx.prepare_cached("UPDATE memories SET importance = ?1 WHERE uid = ?2")?;
-            for (uid, new_imp) in &updates {
-                stmt.execute(rusqlite::params![new_imp, uid])?;
+                 FROM memories WHERE project_id = ?1"
             }
-            Ok(())
-        })?;
-    }
-    Ok(touched)
+            None => {
+                "SELECT uid, importance, decay_base, created_at, access_count, last_access
+                 FROM memories"
+            }
+        };
+        let mut stmt = tx.prepare(select_sql)?;
+        let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(String, f64, Option<f64>, i64, i64, i64)> {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        };
+        let rows: Vec<(String, f32)> = match project_id {
+            Some(p) => stmt
+                .query_map(rusqlite::params![p], map_row)?
+                .filter_map(|r| r.ok())
+                .filter_map(|(uid, importance, decay_base, created_at, access_count, last_access)| {
+                    let base = decay_base.unwrap_or(importance);
+                    let new_imp =
+                        decayed_importance(base, created_at, now, access_count, last_access);
+                    ((new_imp - importance as f32).abs() > 0.001)
+                        .then(|| (uid, new_imp))
+                })
+                .collect(),
+            None => stmt
+                .query_map([], map_row)?
+                .filter_map(|r| r.ok())
+                .filter_map(|(uid, importance, decay_base, created_at, access_count, last_access)| {
+                    let base = decay_base.unwrap_or(importance);
+                    let new_imp =
+                        decayed_importance(base, created_at, now, access_count, last_access);
+                    ((new_imp - importance as f32).abs() > 0.001)
+                        .then(|| (uid, new_imp))
+                })
+                .collect(),
+        };
+        drop(stmt);
+
+        let mut update = tx.prepare_cached("UPDATE memories SET importance = ?1 WHERE uid = ?2")?;
+        for (uid, new_imp) in &rows {
+            update.execute(rusqlite::params![new_imp, uid])?;
+        }
+        Ok(rows.len())
+    })
 }
 
 /// Simple token-set Jaccard similarity, case-insensitive.
