@@ -971,7 +971,8 @@ fn flush_chunk_insert(
 
 fn detect_language(p: &Path) -> Option<&'static str> {
     let ext = p.extension()?.to_str()?;
-    Some(match ext {
+    let ext = ext.to_ascii_lowercase();
+    Some(match ext.as_str() {
         "rs" => "rust",
         "ts" | "tsx" => "typescript",
         "js" | "jsx" | "mjs" | "cjs" => "javascript",
@@ -992,7 +993,7 @@ fn detect_language(p: &Path) -> Option<&'static str> {
         "dart" => "dart",
         "lua" => "lua",
         "scala" | "sc" => "scala",
-        "r" | "R" => "r",
+        "r" => "r",
         "ps1" | "psm1" => "powershell",
         _ => return None,
     })
