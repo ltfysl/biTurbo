@@ -13,10 +13,12 @@ pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| dirs::data_dir().map(|d| d.join("com.biturbo.app")))
         .ok_or_else(|| anyhow::anyhow!("no data dir"))?;
-    std::fs::create_dir_all(&data_dir).ok();
     let state = Arc::new(AppState::open(&data_dir)?);
     crate::operations::resume_pending(state.clone())?;
-
+    // The standalone MCP binary has no GUI lifecycle to spawn the scheduler,
+    // so start it here; otherwise consolidate/consolidate_status are unusable
+    // and enqueue returns a "worker not started" error (#475).
+    crate::scheduler::spawn(state.clone());
     let stdin = tokio::io::stdin();
     let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let mut reader = BufReader::new(stdin);
