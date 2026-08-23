@@ -27,7 +27,7 @@ pub fn list_memories(
         state.inner(),
         project_id.as_deref(),
         mem_type.as_deref(),
-        limit.unwrap_or(50),
+        limit.map(|n| n.clamp(1, 500)).unwrap_or(50),
         offset.unwrap_or(0),
     )
 }
