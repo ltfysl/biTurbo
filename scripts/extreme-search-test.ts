@@ -6,6 +6,11 @@ import { findBinary } from "./mcp-common.ts";
 type RpcId = number;
 interface RpcResponse { jsonrpc: "2.0"; id: RpcId; result?: unknown; error?: { code: number; message: string }; }
 
+// Domain-diversity check (#542): require enough resolvable hits and cap the
+// share of hits coming from forbidden domains instead of demanding none.
+const MIN_RESOLVED_HITS = 3;
+const MAX_FORBIDDEN_SHARE = 0.8;
+
 const COL = { reset: "\x1b[0m", green: "\x1b[32m", red: "\x1b[31m", dim: "\x1b[2m", bold: "\x1b[1m", cyan: "\x1b[36m", yellow: "\x1b[33m" };
 
 class McpClient {
@@ -317,12 +322,14 @@ async function main() {
           const mem = memories.find(m => m.content.includes(h.content.slice(0, 30)));
           return mem?.domain;
         });
-        const allFromForbidden = domains.every(d => test.shouldNotBeAllFrom!.includes(d!));
-        if (!allFromForbidden) {
-          console.log(`  ${COL.green}✓ PASS${COL.reset} - results diversified across domains (${searchTime}ms)`);
+        const resolved = domains.filter((d): d is string => d !== undefined);
+        const forbiddenHits = resolved.filter(d => test.shouldNotBeAllFrom!.includes(d)).length;
+        const forbiddenShare = resolved.length > 0 ? forbiddenHits / resolved.length : 1;
+        if (resolved.length >= MIN_RESOLVED_HITS && forbiddenShare < MAX_FORBIDDEN_SHARE) {
+          console.log(`  ${COL.green}✓ PASS${COL.reset} - results diversified: ${forbiddenHits}/${resolved.length} resolvable hits from ${test.shouldNotBeAllFrom.join(", ")} (${searchTime}ms)`);
           passedTests++;
         } else {
-          console.log(`  ${COL.red}✗ FAIL${COL.reset} - all results from ${test.shouldNotBeAllFrom.join(", ")} (${searchTime}ms)`);
+          console.log(`  ${COL.red}✗ FAIL${COL.reset} - resolved ${resolved.length}/${hits.length} hits (min ${MIN_RESOLVED_HITS}), forbidden-domain share ${(forbiddenShare * 100).toFixed(0)}% (max ${(MAX_FORBIDDEN_SHARE * 100).toFixed(0)}%) (${searchTime}ms)`);
           failures.push(`${test.name}: results not diversified`);
         }
       } else if (test.shouldNotHaveMinImportance !== undefined) {
