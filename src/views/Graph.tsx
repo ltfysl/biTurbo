@@ -216,7 +216,11 @@ export function Graph() {
     setBusy(true);
     try {
       await refreshGraph();
-      showToast({ kind: "ok", text: "Graph refreshed" });
+      if (useApp.getState().graph) {
+        showToast({ kind: "ok", text: "Graph refreshed" });
+      } else {
+        showToast({ kind: "info", text: "No graph yet; run an ingest first" });
+      }
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     } finally {
