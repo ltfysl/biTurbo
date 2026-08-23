@@ -49,3 +49,4 @@ src-tauri/binaries/
 *.db-shm
 *.tv
 *.tvim
+package-lock.json
