@@ -50,17 +50,18 @@ fn prepare_database(db_path: &Path) -> BiResult<()> {
     let parent = db_path
         .parent()
         .ok_or_else(|| crate::error::BiError::Db("database has no parent directory".into()))?;
-    let lock_path = parent.join("biturbo.migrate.lock");
+    let lock_path = db_path.with_extension("write.lock");
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(lock_path)?;
+        .open(&lock_path)?;
     fs2::FileExt::lock_exclusive(&lock)?;
 
     let existed = db_path.exists() && std::fs::metadata(db_path).is_ok_and(|m| m.len() > 0);
     let mut conn = rusqlite::Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version >= CURRENT_SCHEMA_VERSION {
         fs2::FileExt::unlock(&lock)?;

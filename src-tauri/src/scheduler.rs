@@ -30,8 +30,10 @@ struct Shared {
     last_report: Option<ConsolidateReport>,
     running: bool,
     last_finish: Option<Instant>,
-    /// A manual job is queued waiting for the current run to finish.
-    queued: bool,
+    /// A manual job is queued waiting for channel capacity (rare — the
+    /// channel buffers up to 8 jobs). Re-enqueued by the worker after its
+    /// next run.
+    queued: Option<ManualJob>,
 }
 
 static STATE: once_cell::sync::Lazy<Arc<Mutex<Shared>>> =
@@ -51,7 +53,7 @@ pub fn spawn(state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STARTUP_DELAY).await;
         loop {
-            run_once(&state_for_task, None).await;
+            run_once(Arc::clone(&state_for_task), None).await;
             tokio::time::sleep(INTERVAL).await;
         }
     });
@@ -77,13 +79,22 @@ pub fn spawn(state: Arc<AppState>) {
     let _ = JOB_TX.set(manual_tx);
 
     let state_for_worker = state.clone();
+    let tx_for_worker = JOB_TX
+        .get()
+        .expect("manual sender must be set")
+        .clone();
     tauri::async_runtime::spawn(async move {
         while let Some(job) = manual_rx.recv().await {
-            {
-                let mut g = STATE.lock();
-                g.queued = false;
+            run_once(Arc::clone(&state_for_worker), Some(job)).await;
+            // Drain any request that hit a full channel while we were busy.
+            let mut g = STATE.lock();
+            if let Some(queued) = g.queued.take() {
+                if let Err(mpsc::error::TrySendError::Full(again)) =
+                    tx_for_worker.try_send(queued)
+                {
+                    g.queued = Some(again);
+                }
             }
-            run_once(&state_for_worker, Some(job)).await;
         }
     });
 }
@@ -98,15 +109,6 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
             crate::error::BiError::Invalid(format!("project '{pid}' does not exist"))
         })?;
     }
-
-    let mut g = STATE.lock();
-    if g.running {
-        // Coalesce: one manual job is enough while another runs. Mark queued.
-        g.queued = true;
-        return Ok(());
-    }
-    drop(g);
-
     let tx = match JOB_TX.get() {
         Some(tx) => tx.clone(),
         None => {
@@ -117,9 +119,9 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
     };
     match tx.try_send(ManualJob { project_id }) {
         Ok(()) => Ok(()),
-        Err(mpsc::error::TrySendError::Full(_)) => {
+        Err(mpsc::error::TrySendError::Full(job)) => {
             let mut g = STATE.lock();
-            g.queued = true;
+            g.queued = Some(job);
             Ok(())
         }
         Err(mpsc::error::TrySendError::Closed(_)) => Err(crate::error::BiError::Internal(
@@ -127,6 +129,7 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
         )),
     }
 }
+
 
 /// Backwards-compat alias used by the periodic loop and by the original
 /// synchronous call from `commands::consolidate_now` (we no longer use this
@@ -158,7 +161,7 @@ pub fn run_now_blocking(state: &AppState) -> BiResult<ConsolidateReport> {
 
 pub fn get_status() -> ConsolidateStatus {
     let g = STATE.lock();
-    let next = if g.running || g.queued {
+    let next = if g.running || g.queued.is_some() {
         0
     } else if let Some(finish) = g.last_finish {
         INTERVAL
@@ -173,28 +176,46 @@ pub fn get_status() -> ConsolidateStatus {
         last_report: g.last_report.clone(),
         running: g.running,
         interval_secs: INTERVAL.as_secs(),
-        queued: g.queued,
+        queued: g.queued.is_some(),
     }
 }
 
-async fn run_once(state: &AppState, job: Option<ManualJob>) {
-    {
+async fn run_once(state: Arc<AppState>, job: Option<ManualJob>) {
+    if job.is_some() {
+        // Manual jobs must never be dropped: wait out a concurrent periodic
+        // run, then take the slot.
+        loop {
+            {
+                let mut g = STATE.lock();
+                if !g.running {
+                    g.running = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    } else {
         let mut g = STATE.lock();
         if g.running {
-            // Periodic loop stumbled onto a running job — drop it. The manual
-            // worker is the only producer when `job.is_some()`.
-            if job.is_none() {
-                return;
-            }
-            // Should not happen for manual jobs (we gate on `running` before
-            // sending), but bail safely.
+            // Periodic loop stumbled onto a running job — drop it.
             return;
         }
         g.running = true;
     }
-
-    let project_id = job.as_ref().and_then(|j| j.project_id.as_deref());
-    let result = consolidate::consolidate(state, project_id);
+    let project_id = job.and_then(|j| j.project_id);
+    let log_project_id = project_id.clone();
+    // Heavy CPU + synchronous SQLite/embedding work must not park a tokio
+    // runtime worker thread (#461).
+    let blocking_state = Arc::clone(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        consolidate::consolidate(&blocking_state, project_id.as_deref())
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(crate::error::BiError::Internal(format!(
+            "consolidate panicked: {e}"
+        )))
+    });
     let now = chrono::Utc::now().timestamp_millis();
 
     {
@@ -210,11 +231,11 @@ async fn run_once(state: &AppState, job: Option<ManualJob>) {
                 g.last_run_at = Some(now);
                 g.last_report = Some(r.clone());
             }
-            if let Some(pid) = project_id {
+            if let Some(pid) = log_project_id {
                 let _ = state.db.write(|tx| {
                     log_activity(
                         tx,
-                        Some(pid),
+                        Some(pid.as_str()),
                         None,
                         "consolidate",
                         None,

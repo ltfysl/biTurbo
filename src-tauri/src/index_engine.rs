@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tracing;
 use turbovec::IdMapIndex;
@@ -24,7 +24,7 @@ pub struct ProjectIndex {
     pub bit_width: usize,
     inner: Mutex<Inner>,
     file_path: PathBuf,
-    dirty: AtomicBool,
+    dirty: AtomicU64,
     last_change: Mutex<Instant>,
 }
 
@@ -79,7 +79,7 @@ impl ProjectIndex {
                 next_extid,
             }),
             file_path,
-            dirty: AtomicBool::new(false),
+            dirty: AtomicU64::new(0),
             last_change: Mutex::new(Instant::now()),
         })
     }
@@ -116,6 +116,7 @@ impl ProjectIndex {
         let mut inner = self.inner.lock();
         let mut flat: Vec<f32> = Vec::with_capacity(items.len() * self.dim);
         let mut ids: Vec<u64> = Vec::with_capacity(items.len());
+        let mut pairs: Vec<(String, u64)> = Vec::with_capacity(items.len());
         let mut seen: HashSet<&str> = HashSet::new();
         for (uid, vector) in items {
             if !seen.insert(uid) {
@@ -130,7 +131,6 @@ impl ProjectIndex {
             let extid = match inner.uid_to_extid.get(uid) {
                 Some(&id) => {
                     let _ = inner.index.remove(id);
-                    inner.extid_to_uid.remove(&id);
                     id
                 }
                 None => {
@@ -139,15 +139,20 @@ impl ProjectIndex {
                     id
                 }
             };
-            inner.uid_to_extid.insert(uid.clone(), extid);
-            inner.extid_to_uid.insert(extid, uid.clone());
             ids.push(extid);
             flat.extend_from_slice(vector);
+            pairs.push((uid.clone(), extid));
         }
         inner
             .index
             .add_with_ids(&flat, &ids)
             .map_err(|e| BiError::Index(format!("add_batch: {e}")))?;
+        // Apply the map deltas only after the vectors are committed so a
+        // failed add never leaves phantom mappings behind (#458).
+        for (uid, extid) in pairs {
+            inner.uid_to_extid.insert(uid.clone(), extid);
+            inner.extid_to_uid.insert(extid, uid);
+        }
         drop(inner);
         self.mark_dirty();
         Ok(())
@@ -167,7 +172,7 @@ impl ProjectIndex {
     }
 
     fn mark_dirty(&self) {
-        self.dirty.store(true, Ordering::Release);
+        self.dirty.fetch_add(1, Ordering::SeqCst);
         *self.last_change.lock() = Instant::now();
     }
 
@@ -175,7 +180,7 @@ impl ProjectIndex {
     /// the last change was more than `min_idle` ago, or if `force` is true.
     /// Returns true if a write actually happened.
     pub fn maybe_flush(&self, min_idle: Duration, force: bool) -> BiResult<bool> {
-        if !self.dirty.load(Ordering::Acquire) {
+        if self.dirty.load(Ordering::Acquire) == 0 {
             return Ok(false);
         }
         if !force && self.last_change.lock().elapsed() < min_idle {
@@ -191,6 +196,7 @@ impl ProjectIndex {
 
     fn persist_now(&self) -> BiResult<bool> {
         let inner = self.inner.lock();
+        let dirty_gen = self.dirty.load(Ordering::Acquire);
         // Write to temp files then rename, so a crash mid-write never
         // corrupts the on-disk index.
         let tmp_index = self.file_path.with_extension("tvim.tmp");
@@ -226,7 +232,10 @@ impl ProjectIndex {
                 let _ = dir_file.sync_all();
             }
         }
-        self.dirty.store(false, Ordering::Release);
+        // Only clear if no new mutation landed while we were writing (#457).
+        let _ = self
+            .dirty
+            .compare_exchange(dirty_gen, 0, Ordering::AcqRel, Ordering::Acquire);
         Ok(true)
     }
 
