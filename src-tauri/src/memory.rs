@@ -440,17 +440,13 @@ pub(crate) fn fts_search(
     let kk_i64 = limit as i64;
     let or_query = sanitize_fts_query(query, FtsCombine::Or);
     if !or_query.is_empty() {
-        if let Ok(hits) = run_fts_query(conn, &or_query, project_id, mem_type, kk_i64) {
-            if !hits.is_empty() {
-                return Ok(hits);
-            }
-        }
+        // An AND query is a semantic subset of OR: when the OR pass matches
+        // nothing, AND cannot either. Errors are propagated, not swallowed
+        // (#448), so a broken FTS table surfaces instead of silently
+        // degrading recall.
+        return run_fts_query(conn, &or_query, project_id, mem_type, kk_i64);
     }
-    let and_query = sanitize_fts_query(query, FtsCombine::And);
-    if and_query.is_empty() {
-        return Ok(Vec::new());
-    }
-    run_fts_query(conn, &and_query, project_id, mem_type, kk_i64)
+    Ok(Vec::new())
 }
 
 fn run_fts_query(
@@ -496,7 +492,6 @@ fn run_fts_query(
 
 #[derive(Clone, Copy)]
 enum FtsCombine {
-    And,
     Or,
 }
 
@@ -514,7 +509,6 @@ fn sanitize_fts_query(q: &str, combine: FtsCombine) -> String {
         return String::new();
     }
     let sep = match combine {
-        FtsCombine::And => " ",
         FtsCombine::Or => " OR ",
     };
     tokens.join(sep)
