@@ -7,7 +7,6 @@ import type {
   ActivityEntry,
   Stats,
   IngestJob,
-  ConsolidateReport,
   ConsolidateStatus,
   GraphData,
   BootstrapPayload,
