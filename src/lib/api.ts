@@ -154,7 +154,7 @@ export const api = {
     }),
 
   consolidate: (project_id?: string | null) =>
-    invoke<ConsolidateReport>("consolidate_now", {
+    invoke<ConsolidateStatus>("consolidate_now", {
       projectId: project_id ?? null,
     }),
 

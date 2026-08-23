@@ -31,11 +31,21 @@ export interface MemoryWithScore extends Memory {
   score: number;
 }
 
+export interface RankingBoosts {
+  content_matches: number;
+  tag_matches: number;
+  path_matches: number;
+  language_match: boolean;
+  multiplier: number;
+  importance_boost: number;
+}
+
 export interface RecallExplanation {
   vector_rank: number | null;
   fts_rank: number | null;
   matched_terms: string[];
   feedback_boost: number;
+  applied_boosts?: RankingBoosts;
 }
 
 export interface ExplainedMemory extends MemoryWithScore {
