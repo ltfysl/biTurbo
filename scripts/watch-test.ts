@@ -62,6 +62,9 @@ class McpClient {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     const r = await this.call("tools/call", { name, arguments: args });
     if (r.error) throw new Error(`${name} failed: ${r.error.message}`);
+    if (r.result && isErrorResult(r.result)) {
+      throw new Error(`${name} returned error: ${extractText(r.result)}`);
+    }
     if (process.env.VERBOSE) {
       console.log(`${COL.dim}[MCP] ${name} → ${JSON.stringify(r.result).slice(0, 200)}${COL.reset}`);
     }
@@ -71,20 +74,34 @@ class McpClient {
   close() { try { this.proc.kill(); } catch {} }
 }
 
+function isErrorResult(result: unknown): boolean {
+  return (
+    result !== null &&
+    typeof result === "object" &&
+    "isError" in result &&
+    result.isError === true
+  );
+}
+
 function extractText(result: unknown): string {
-  if (!result || typeof result !== "object") return "";
-  const r = result as { content?: Array<{ type: string; text?: string }> };
-  if (!Array.isArray(r.content)) return "";
-  return r.content.filter((c) => c.type === "text" && typeof c.text === "string").map((c) => c.text!).join("\n");
+  if (result === null || typeof result !== "object" || !("content" in result)) {
+    return "";
+  }
+  if (!Array.isArray(result.content)) {
+    return "";
+  }
+  return result.content
+    .filter((c: unknown): c is { text: string } => {
+      return c !== null && typeof c === "object" && "text" in c && typeof c.text === "string";
+    })
+    .map((c) => c.text)
+    .join("\n");
 }
 
 function extractJson<T>(result: unknown): T {
   return JSON.parse(extractText(result)) as T;
 }
 
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function main() {
   const bin = process.argv[2] ?? findBinary();
@@ -145,7 +162,9 @@ async function main() {
     console.log(`  Created new-file.rs`);
     
     console.log(`  Waiting 5 seconds for watcher to trigger re-ingestion...`);
-    await sleep(5000);
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 5000);
+    await promise;
 
     // Check if re-ingestion happened
     const listAfter = extractJson<any[]>(
