@@ -356,7 +356,9 @@ fn spawn_watcher(state: &AppState, project_id: &str, root: &Path) -> BiResult<()
             let job_state_for_task = job_state_for_cb.clone();
             // Full ingests are heavy (tree-sitter + ONNX): run them on the
             // blocking pool instead of parking a tokio worker thread (#234).
-            let _ = tauri::async_runtime::spawn_blocking(move || {
+            // Detached on purpose; dropping the JoinHandle explicitly keeps
+            // clippy's let_underscore_future quiet about the ignored future.
+            std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
                 std::thread::sleep(Duration::from_secs(2));
                 let started = Instant::now();
                 if let Err(e) =
@@ -384,7 +386,7 @@ fn spawn_watcher(state: &AppState, project_id: &str, root: &Path) -> BiResult<()
                     state.running = false;
                     state.last_ingest = Some(Instant::now());
                 }
-            });
+            }));
         }) {
             Ok(w) => w,
             Err(e) => {
