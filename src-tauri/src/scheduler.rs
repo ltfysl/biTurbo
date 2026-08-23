@@ -79,18 +79,14 @@ pub fn spawn(state: Arc<AppState>) {
     let _ = JOB_TX.set(manual_tx);
 
     let state_for_worker = state.clone();
-    let tx_for_worker = JOB_TX
-        .get()
-        .expect("manual sender must be set")
-        .clone();
+    let tx_for_worker = JOB_TX.get().expect("manual sender must be set").clone();
     tauri::async_runtime::spawn(async move {
         while let Some(job) = manual_rx.recv().await {
             run_once(Arc::clone(&state_for_worker), Some(job)).await;
             // Drain any request that hit a full channel while we were busy.
             let mut g = STATE.lock();
             if let Some(queued) = g.queued.take() {
-                if let Err(mpsc::error::TrySendError::Full(again)) =
-                    tx_for_worker.try_send(queued)
+                if let Err(mpsc::error::TrySendError::Full(again)) = tx_for_worker.try_send(queued)
                 {
                     g.queued = Some(again);
                 }
@@ -129,7 +125,6 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
         )),
     }
 }
-
 
 /// Backwards-compat alias used by the periodic loop and by the original
 /// synchronous call from `commands::consolidate_now` (we no longer use this

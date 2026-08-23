@@ -603,7 +603,6 @@ pub fn list_tags(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(St
     Ok(v)
 }
 
-
 /// Filter out common stopwords from query terms
 pub(crate) fn filter_stopwords(terms: &[String]) -> Vec<String> {
     const STOPWORDS: &[&str] = &[

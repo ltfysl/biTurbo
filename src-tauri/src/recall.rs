@@ -199,7 +199,7 @@ pub(crate) fn ranking_boosts(memory: &memory::Memory, terms: &[String]) -> Ranki
                 let tag = tag.to_lowercase();
                 tag.as_str() == term.as_str()
                     || (tag.chars().count() >= 3
-                        && tag.find(term.as_str()).map_or(false, |start| {
+                        && tag.find(term.as_str()).is_some_and(|start| {
                             let end = start + term.len();
                             let prev = if start > 0 {
                                 tag[..start].chars().next_back()
