@@ -2,8 +2,6 @@ use crate::error::{BiError, BiResult};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use hex;
 use lru::LruCache;
-use once_cell::sync::Lazy;
-use ort::execution_providers::{CPUExecutionProvider, ExecutionProviderDispatch};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
 use std::num::NonZeroUsize;
@@ -11,11 +9,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing;
 
+use ort::execution_providers::{CPUExecutionProvider, ExecutionProviderDispatch};
+
 #[cfg(feature = "cuda")]
 use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
-
-static EMBED_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
 pub const DEFAULT_DIM: usize = 384;
 pub const DEFAULT_MODEL: &str = "BGE-small-en-v1.5";
 const QUERY_CACHE_CAP: usize = 256;
@@ -33,6 +30,10 @@ pub struct Embedder {
     pub dim: usize,
     query_cache: Arc<Mutex<LruCache<String, Vec<f32>>>>,
     last_used: Arc<Mutex<Instant>>,
+    /// Serializes model init/embed/release per instance instead of one
+    /// process-wide lock (#447): distinct project embedders no longer
+    /// block each other.
+    embed_lock: Arc<Mutex<()>>,
 }
 
 impl Embedder {
@@ -49,6 +50,7 @@ impl Embedder {
                 NonZeroUsize::new(QUERY_CACHE_CAP).unwrap(),
             ))),
             last_used: Arc::new(Mutex::new(Instant::now())),
+            embed_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -93,6 +95,14 @@ impl Embedder {
                 Ok(())
             })?;
 
+            if computed.len() != missing.len() {
+                return Err(BiError::Embed(format!(
+                    "embedding count mismatch: expected {}, got {}",
+                    missing.len(),
+                    computed.len()
+                )));
+            }
+
             let mut cache = self.query_cache.lock();
             for ((idx, text), v) in missing.iter().zip(computed) {
                 let key = cache_key(text);
@@ -101,7 +111,10 @@ impl Embedder {
             }
         }
 
-        Ok(cached.into_iter().map(|o| o.unwrap()).collect())
+        Ok(cached
+            .into_iter()
+            .map(|o| o.ok_or_else(|| BiError::Embed("embedding count mismatch".into())))
+            .collect::<BiResult<Vec<_>>>()?)
     }
 
     /// Uncached bulk embedding for large batches (e.g., project ingest).
@@ -120,8 +133,10 @@ impl Embedder {
     where
         F: FnMut(&[&str], Vec<Vec<f32>>) -> BiResult<()>,
     {
+        // Hold the per-instance lock across ensure + embed so a concurrent
+        // release cannot drop the model mid-inference (#446).
+        let _guard = self.embed_lock.lock();
         self.ensure_model()?;
-        let _guard = EMBED_LOCK.lock();
         let guard = self.model.read();
         let model = guard
             .as_ref()
@@ -148,7 +163,7 @@ impl Embedder {
         if idle_for < IDLE_RELEASE {
             return;
         }
-        let _guard = EMBED_LOCK.lock();
+        let _guard = self.embed_lock.lock();
         *self.model.write() = None;
         *self.last_used.lock() = Instant::now();
     }
@@ -156,7 +171,7 @@ impl Embedder {
     /// Force immediate model release — call after heavy workloads like ingest
     /// to free ONNX session memory and threads immediately.
     pub fn force_release(&self) {
-        let _guard = EMBED_LOCK.lock();
+        let _guard = self.embed_lock.lock();
         *self.model.write() = None;
         *self.last_used.lock() = Instant::now();
     }
