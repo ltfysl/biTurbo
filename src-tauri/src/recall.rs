@@ -306,6 +306,14 @@ pub fn submit_feedback(
                 chrono::Utc::now().timestamp_millis()
             ],
         )?;
+        // recall_feedback grows with every submit; keep the newest rows per
+        // the same retention window as recall_events (#438).
+        tx.execute(
+            "DELETE FROM recall_feedback WHERE id NOT IN (
+                 SELECT id FROM recall_feedback ORDER BY created_at DESC LIMIT 5000
+             )",
+            [],
+        )?;
         Ok(())
     })
 }
