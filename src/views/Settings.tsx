@@ -441,7 +441,7 @@ ${end}`;
         </div>
 
         <p className="mt-3 text-sm text-text-muted">
-          Once connected, your agent has 20 tools (search, remember, forget, ingest_project,
+          Once connected, your agent has 27 tools (search, remember, forget, ingest_project,
           consolidate, list_projects, …). See <span className="kbd">INSTRUCTIONS.md</span> in the
           project root for the full tool reference and usage rules.
         </p>
