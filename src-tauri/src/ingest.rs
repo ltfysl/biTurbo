@@ -1067,8 +1067,20 @@ static LANG_BUNDLES: Lazy<HashMap<&'static str, LangBundle>> = Lazy::new(|| {
         let Ok(language) = language_for(name) else {
             continue;
         };
-        let chunk_query = chunk_query_src(name).and_then(|src| Query::new(&language, src).ok());
-        let import_query = import_query_src(name).and_then(|src| Query::new(&language, src).ok());
+        let chunk_query = chunk_query_src(name).and_then(|src| match Query::new(&language, src) {
+            Ok(q) => Some(q),
+            Err(e) => {
+                tracing::warn!("ingest: failed to compile chunk query for {name}: {e}");
+                None
+            }
+        });
+        let import_query = import_query_src(name).and_then(|src| match Query::new(&language, src) {
+            Ok(q) => Some(q),
+            Err(e) => {
+                tracing::warn!("ingest: failed to compile import query for {name}: {e}");
+                None
+            }
+        });
         map.insert(
             name,
             LangBundle {
