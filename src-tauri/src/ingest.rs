@@ -1153,7 +1153,7 @@ fn parse_one_file(
     let file_path_str = path.to_string_lossy().to_string();
     for chunk in chunks {
         // Include the end line: minified/bundled files routinely declare many
-        // functions on one physical line, so start_line alone collides (#562).
+        // functions on one physical line, so start_line-only UIDs collide (#232, #562).
         // collect_chunks dedupes exact (start, end) spans, making this unique.
         let uid = format!(
             "{project_id}::{}::{}-{}",
@@ -1427,6 +1427,8 @@ fn import_query_src(lang: &str) -> Option<&'static str> {
             (extern_crate_declaration name: (identifier) @imp)
         "#
         }
+        // Limit call_expression captures to `require` so test/utility calls don't
+        // become bogus import edges (#238).
         "javascript" | "typescript" => {
             r#"
             (import_statement source: (string) @imp)
