@@ -111,10 +111,10 @@ impl Embedder {
             }
         }
 
-        Ok(cached
+        cached
             .into_iter()
             .map(|o| o.ok_or_else(|| BiError::Embed("embedding count mismatch".into())))
-            .collect::<BiResult<Vec<_>>>()?)
+            .collect()
     }
 
     /// Uncached bulk embedding for large batches (e.g., project ingest).
