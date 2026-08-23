@@ -249,7 +249,9 @@ pub fn ingest_project_controlled(
 
     emit_progress(state, project_id, "scanning", 0, 1, None, 0);
 
-    let files: Vec<PathBuf> = WalkBuilder::new(root)
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut walk_error_count = 0usize;
+    for entry_result in WalkBuilder::new(root)
         .follow_links(false)
         .standard_filters(true)
         .git_ignore(true)
@@ -260,10 +262,25 @@ pub fn ingest_project_controlled(
         .max_filesize(Some(MAX_FILE_SIZE))
         .filter_entry(is_vcs_meta_dir)
         .build()
-        .filter_map(|r| r.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| detect_language(e.path()).map(|_| e.path().to_path_buf()))
-        .collect();
+    {
+        match entry_result {
+            Ok(entry) if entry.path().is_file() => {
+                if detect_language(entry.path()).is_some() {
+                    files.push(entry.path().to_path_buf());
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                walk_error_count += 1;
+                if walk_error_count <= 5 {
+                    result.errors.push(format!("walk error: {}", e));
+                }
+            }
+        }
+    }
+    if walk_error_count > 5 {
+        result.errors.push(format!("... and {} more walk errors", walk_error_count - 5));
+    }
 
     let conn = state.db.conn()?;
     let existing_files = db::get_indexed_files(&conn, project_id)?;
