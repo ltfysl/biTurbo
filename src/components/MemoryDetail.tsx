@@ -12,6 +12,8 @@ import { CodeBlock } from "./CodeBlock";
 export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () => void }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const [draft, setDraft] = useState(memory.content);
   const [draftTags, setDraftTags] = useState(memory.tags.join(", "));
   const [draftImp, setDraftImp] = useState(memory.importance);
@@ -21,6 +23,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const draftCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
   const baselineCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
   const prevUidRef = useRef(memory.uid);
+  const lastUpdatedAtRef = useRef(memory.updated_at);
   const refreshMemories = useApp((s) => s.refreshMemories);
   const refreshTags = useApp((s) => s.refreshTags);
   const refreshStats = useApp((s) => s.refreshStats);
@@ -35,6 +38,8 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       tags: memory.tags.join(", "),
       imp: memory.importance,
     });
+    lastUpdatedAtRef.current = memory.updated_at;
+    setConflict(false);
     const prevUid = prevUidRef.current;
     if (prevUid === memory.uid) return;
     const base = baselineCache.current.get(prevUid);
@@ -53,6 +58,27 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
     setExpanded(false);
     prevUidRef.current = memory.uid;
   }, [memory.uid]);
+
+  // If the same memory is updated externally while we're looking at it,
+  // reseed the drafts (when not editing) or surface a conflict notice.
+  useEffect(() => {
+    if (memory.updated_at === lastUpdatedAtRef.current) return;
+    if (editing) {
+      setConflict(true);
+      showToast({ kind: "info", text: "This memory was updated elsewhere. Save or discard." });
+    } else {
+      setConflict(false);
+      setDraft(memory.content);
+      setDraftTags(memory.tags.join(", "));
+      setDraftImp(memory.importance);
+      baselineCache.current.set(memory.uid, {
+        content: memory.content,
+        tags: memory.tags.join(", "),
+        imp: memory.importance,
+      });
+    }
+    lastUpdatedAtRef.current = memory.updated_at;
+  }, [memory.updated_at, editing]);
 
   useEffect(() => {
     (async () => {
@@ -76,6 +102,8 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   }, [memory.uid, memory.project_id]);
 
   async function save() {
+    if (saving || conflict) return;
+    setSaving(true);
     try {
       await api.update(memory.uid, {
         content: draft,
@@ -84,12 +112,15 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           .map((s) => s.trim())
           .filter(Boolean),
         importance: draftImp,
+        updated_at: memory.updated_at,
       });
       await refreshMemories();
       showToast({ kind: "ok", text: "Saved" });
       setEditing(false);
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -353,15 +384,28 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       <div className="flex items-center gap-2 border-t border-border-subtle p-3">
         {editing ? (
           <>
-            {dirty && (
+            {dirty && !conflict && (
               <span className="text-[10px] uppercase tracking-widest text-warning">
                 Unsaved
               </span>
             )}
-            <button onClick={save} className="btn-primary flex-1">
-              <Save size={14} /> Save
+            {conflict && (
+              <span className="text-[10px] uppercase tracking-widest text-warning">
+                Out of date
+              </span>
+            )}
+            <button
+              onClick={save}
+              disabled={saving || !dirty || conflict}
+              className="btn-primary flex-1 disabled:opacity-50"
+            >
+              <Save size={14} /> {saving ? "Saving…" : "Save"}
             </button>
-            <button onClick={() => setEditing(false)} className="btn-outline">
+            <button
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              className="btn-outline disabled:opacity-50"
+            >
               Cancel
             </button>
           </>

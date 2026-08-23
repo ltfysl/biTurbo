@@ -34,6 +34,7 @@ export interface UpdateInput {
   mem_type?: string | null;
   tags?: string[] | null;
   importance?: number | null;
+  updated_at?: number | null;
 }
 
 export const api = {
