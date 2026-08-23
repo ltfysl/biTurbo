@@ -25,37 +25,9 @@ export function Projects() {
   const ingestJobIds = useApp((s) => s.ingestJobIds);
   const registerIngestJob = useApp((s) => s.registerIngestJob);
   const [busy, setBusy] = useState<string | null>(null);
-  const [watchOn, setWatchOn] = useState<Record<string, boolean>>({});
   const [importingFor, setImportingFor] = useState<string | null>(null);
   const [importErrors, setImportErrors] = useState<{ projectId: string; errors: string[] } | null>(null);
 
-  useEffect(() => {
-    const next: Record<string, boolean> = {};
-    for (const p of projects) next[p.id] = p.watch_enabled;
-    setWatchOn(next);
-  }, [projects]);
-
-  // The watcher is the source of truth: reconcile badges with its live
-  // status (a watcher may have been stopped externally since boot).
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .watchStatus()
-      .then((status) => {
-        if (cancelled) return;
-        setWatchOn((prev) => {
-          const next = { ...prev };
-          for (const id of Object.keys(next)) next[id] = status.watching.includes(id);
-          return next;
-        });
-      })
-      .catch(() => {
-        /* keep project-list defaults when the watcher is unreachable */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const activeIngest = Object.values(ingestJobs)[0] as IngestProgress | undefined;
 
@@ -193,7 +165,7 @@ export function Projects() {
   async function toggleWatch(projectId: string, root: string | null, enabled: boolean) {
     try {
       await api.setWatch(projectId, root, enabled);
-      setWatchOn((s) => ({ ...s, [projectId]: enabled }));
+      await refreshProjects();
       showToast({
         kind: "ok",
         text: enabled ? `Watching ${projectId} (auto-reingest on changes)` : `Stopped watching ${projectId}`,
@@ -479,7 +451,7 @@ export function Projects() {
                     >
                       dim={p.dim} · {p.bit_width}-bit{p.embed_model ? ` · ${p.embed_model}` : ""}
                     </span>
-                    {watchOn[p.id] && (
+                    {p.watch_enabled && (
                       <span
                         className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/10 px-1.5 py-0.5 text-[10px] text-success"
                         title="Watching for changes"
@@ -539,15 +511,15 @@ export function Projects() {
                 )}
                 {p.root_path && (
                   <button
-                    onClick={() => toggleWatch(p.id, p.root_path, !watchOn[p.id])}
+                    onClick={() => toggleWatch(p.id, p.root_path, !p.watch_enabled)}
                     className={clsx(
                       "btn-outline",
-                      watchOn[p.id] && "border-success/40 text-success"
+                      p.watch_enabled && "border-success/40 text-success"
                     )}
-                    title={watchOn[p.id] ? "Stop watching for changes" : "Watch for changes; auto-reingest on file events"}
+                    title={p.watch_enabled ? "Stop watching for changes" : "Watch for changes; auto-reingest on file events"}
                   >
                     <Radar size={12} />
-                    {watchOn[p.id] ? "Unwatch" : "Watch"}
+                    {p.watch_enabled ? "Unwatch" : "Watch"}
                   </button>
                 )}
                 <button
