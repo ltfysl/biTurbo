@@ -44,28 +44,33 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck frontend
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Lint frontend
-        run: npm run lint
+        run: pnpm lint
 
       - name: Test frontend
-        run: npm run test
+        run: pnpm test
 
       - name: Typecheck scripts
-        run: npm run typecheck:scripts
+        run: pnpm typecheck:scripts
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm build
 
       - name: Create sidecar placeholder
         run: |
@@ -101,16 +106,24 @@ jobs:
           restore-keys: |
             biturbo-models-${{ runner.os }}-
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
       - name: Create sidecar placeholder
         run: |
           mkdir -p src-tauri/binaries
           echo placeholder > src-tauri/binaries/biturbo-mcp-x86_64-unknown-linux-gnu
-      - run: npm run mcp:build
-      - run: npm run mcp:test
+
+      - run: pnpm mcp:build
+      - run: pnpm mcp:test
         env:
           BITURBO_EMBED_EP: cpu

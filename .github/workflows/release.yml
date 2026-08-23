@@ -50,16 +50,21 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm build
 
       - name: Build MCP sidecar binary
         shell: bash
@@ -136,5 +141,5 @@ jobs:
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
-          tauriScript: npm run tauri
+          tauriScript: pnpm tauri
           args: ${{ matrix.args }}${{ steps.signing.outputs.sign_args }}
