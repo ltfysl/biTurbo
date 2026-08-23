@@ -256,9 +256,9 @@ pub fn consolidate_now(
     project_id: Option<String>,
 ) -> BiResult<ConsolidateStatus> {
     crate::operations::start_consolidate(state.inner(), project_id.as_deref())?;
-    let mut status = crate::scheduler::get_status();
-    status.queued = true;
-    Ok(status)
+    // Report the scheduler's real queue state instead of fabricating
+    // queued=true — a concurrent run makes this a no-op enqueue (#426).
+    Ok(crate::scheduler::get_status())
 }
 
 #[tauri::command]
@@ -372,6 +372,14 @@ pub fn set_watch(state: State<'_, AppState>, args: WatchArgs) -> BiResult<crate:
                     crate::error::BiError::Invalid("no root_path on project".into())
                 })?)
             };
+        // Same existence gate as the ingest commands so a typo cannot arm a
+        // watcher over a path that will silently ingest nothing (#422).
+        if !root.is_dir() {
+            return Err(crate::error::BiError::Invalid(format!(
+                "root_path '{}' does not exist on disk",
+                root.display()
+            )));
+        }
         crate::io::enable_watch(state.inner(), &args.project_id, &root)?;
     } else {
         crate::io::disable_watch(state.inner(), &args.project_id)?;

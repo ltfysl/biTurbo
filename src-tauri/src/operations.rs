@@ -560,6 +560,7 @@ fn execute_multi_ingest(
 ) -> BiResult<crate::ingest::MultiIngestResult> {
     let _operation_lock = lock_operation(state, id)?;
     mark_running(state, id)?;
+    let started = std::time::Instant::now();
     let mut combined = crate::ingest::MultiIngestResult::default();
     let total = projects.len();
     for (position, (project_id, root)) in projects.into_iter().enumerate() {
@@ -595,8 +596,7 @@ fn execute_multi_ingest(
                 "job_id": id,
                 "total_files_indexed": combined.total_files_indexed,
                 "total_chunks_indexed": combined.total_chunks_indexed,
-                "total_edges_created": combined.total_edges_created,
-                "elapsed_ms": 0,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
                 "results": combined.results,
             }),
         );
