@@ -4,8 +4,9 @@
  * and verify that re-ingestion happens automatically.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { findBinary, makeDataDir } from "./mcp-common.ts";
 
 type RpcId = number;
 interface RpcResponse { jsonrpc: "2.0"; id: RpcId; result?: unknown; error?: { code: number; message: string }; }
@@ -86,14 +87,14 @@ async function sleep(ms: number) {
 }
 
 async function main() {
-  const bin = process.argv[2] ?? resolve(process.cwd(), "src-tauri/target/debug/biturbo-mcp.exe");
+  const bin = process.argv[2] ?? findBinary();
   if (!existsSync(bin)) { console.error(`${COL.red}Binary not found: ${bin}${COL.reset}`); process.exit(1); }
-
   console.log(`${COL.bold}${COL.cyan}=== Watch Feature Test ===${COL.reset}\n`);
 
   const client = new McpClient(bin);
+  let exitCode = 1;
   const projectId = `watch-test-${Date.now().toString(36)}`;
-  const testDir = resolve(process.cwd(), `test-watch-${Date.now().toString(36)}`);
+  const testDir = makeDataDir();
 
   try {
     await client.initialize();
@@ -109,7 +110,7 @@ async function main() {
     const createText = extractText(createResult);
     if (createText.includes("error")) {
       console.error(`${COL.red}Failed to create project: ${createText}${COL.reset}`);
-      process.exit(1);
+      return;
     }
     console.log(`${COL.dim}Created project: ${projectId}${COL.reset}\n`);
 
@@ -169,15 +170,17 @@ async function main() {
     );
     console.log(`  Watch disabled, now watching ${watchStatusAfter.enabled_projects} project(s)`);
 
-    // Cleanup
+    // Cleanup (fixture dir is removed in finally)
     await client.callTool("delete_project", { project_id: projectId });
-    rmSync(testDir, { recursive: true, force: true });
     console.log(`\n${COL.dim}Cleaned up${COL.reset}`);
 
-    process.exit(countAfter > countBefore ? 0 : 1);
+    exitCode = countAfter > countBefore ? 0 : 1;
+
   } finally {
     client.close();
+    rmSync(testDir, { recursive: true, force: true });
   }
+  process.exit(exitCode);
 }
 
 main().catch((e) => { console.error(`${COL.red}Crashed: ${e}${COL.reset}`); process.exit(2); });
