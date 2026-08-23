@@ -16,6 +16,7 @@ import { ContextMenuHost } from "./components/ContextMenu";
 export default function App() {
   const view = useApp((s) => s.view);
   const currentProjectId = useApp((s) => s.currentProjectId);
+  const showToast = useApp((s) => s.showToast);
   const [ready, setReady] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
 
@@ -44,7 +45,7 @@ export default function App() {
   // Re-fetch project-scoped data when the active project changes.
   useEffect(() => {
     if (!ready) return;
-    refreshMemories();
+    refreshMemories().catch((e) => showToast({ kind: "err", text: `Failed to load memories: ${e}` }));
     refreshTags().catch(() => {});
     refreshGraph().catch(() => {});
   }, [currentProjectId, ready, refreshMemories, refreshTags, refreshGraph]);
