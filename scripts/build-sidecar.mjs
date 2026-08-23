@@ -4,7 +4,7 @@
 // Tauri's build.rs validates externalBin paths at compile time, so we create
 // a placeholder file before building, then overwrite it with the real binary.
 import { execSync } from "node:child_process";
-import { cpSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -44,4 +44,9 @@ if (!existsSync(src)) {
 }
 
 cpSync(src, dst);
+const copied = readFileSync(dst).subarray(0, 16).toString();
+if (copied === "placeholder" || copied.length < 16) {
+  console.error(`Built sidecar at ${dst} is still the placeholder or too small`);
+  process.exit(1);
+}
 console.log(`Sidecar copied to ${dst}`);
