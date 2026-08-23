@@ -68,6 +68,8 @@ export interface Project {
   indexed_count: number;
   embed_model: string | null;
   watch_enabled: boolean;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface AgentEntry {
@@ -139,6 +141,24 @@ export interface IngestError {
   error: string;
 }
 
+export interface MultiIngestResult {
+  results: IngestResult[];
+  total_files_indexed: number;
+  total_chunks_indexed: number;
+  total_bytes_processed: number;
+  total_errors: number;
+  total_edges_created: number;
+}
+
+export interface MultiIngestDone {
+  job_id: string;
+  total_files_indexed: number;
+  total_chunks_indexed: number;
+  total_edges_created: number;
+  elapsed_ms: number;
+  results: IngestResult[];
+}
+
 export interface Operation {
   id: string;
   kind: string;
@@ -170,7 +190,7 @@ export interface ConsolidateStatus {
   last_report: ConsolidateReport | null;
   running: boolean;
   interval_secs: number;
-  queued?: boolean;
+  queued: boolean;
 }
 
 export interface BootstrapPayload {

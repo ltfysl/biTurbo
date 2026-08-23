@@ -103,6 +103,10 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
   async function save() {
     if (saving || conflict) return;
+    if (!draft.trim()) {
+      showToast({ kind: "err", text: "Content cannot be empty" });
+      return;
+    }
     setSaving(true);
     try {
       await api.update(memory.uid, {
@@ -396,7 +400,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
             )}
             <button
               onClick={save}
-              disabled={saving || !dirty || conflict}
+              disabled={saving || !dirty || conflict || !draft.trim()}
               className="btn-primary flex-1 disabled:opacity-50"
             >
               <Save size={14} /> {saving ? "Saving…" : "Save"}

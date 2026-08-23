@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import clsx from "clsx";
 import { useApp } from "../lib/store";
@@ -45,7 +45,6 @@ function ConfirmModal({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
-  const [pending, setPending] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const tone = opts.tone ?? "danger";
 
@@ -101,20 +100,9 @@ function ConfirmModal({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  async function handleConfirm() {
-    setPending(true);
-    try {
-      onResolve();
-    } finally {
-      // The store removes the modal synchronously when onResolve is
-      // called, so by the time this runs the component is unmounted
-      // anyway. Guard anyway.
-      setPending(false);
-    }
-  }
-
   const confirmLabel = opts.confirmLabel ?? "Delete";
   const cancelLabel = opts.cancelLabel ?? "Cancel";
+
 
   return (
     <div
@@ -159,15 +147,13 @@ function ConfirmModal({
           <button
             ref={cancelRef}
             onClick={onCancel}
-            disabled={pending}
             className="btn-outline"
           >
             {cancelLabel}
           </button>
           <button
             ref={confirmRef}
-            onClick={handleConfirm}
-            disabled={pending}
+            onClick={onResolve}
             className={clsx(
               "btn",
               tone === "danger"
@@ -175,17 +161,7 @@ function ConfirmModal({
                 : "btn-primary"
             )}
           >
-            {pending ? (
-              <span className="flex items-center gap-2">
-                <span
-                  className="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"
-                  aria-hidden
-                />
-                <span>Working…</span>
-              </span>
-            ) : (
-              confirmLabel
-            )}
+            {confirmLabel}
           </button>
         </div>
       </div>
