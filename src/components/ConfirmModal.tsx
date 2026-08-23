@@ -47,6 +47,7 @@ function ConfirmModal({
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const [pending, setPending] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const tone = opts.tone ?? "danger";
 
   // Keep Tab cycling within the modal.
   function trapTab(e: React.KeyboardEvent) {

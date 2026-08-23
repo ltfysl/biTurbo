@@ -114,6 +114,12 @@ export function Graph() {
   //    children). Always < 5ms even for 10k nodes.
   // 2. Kick off the worker to refine via Barnes-Hut. Cancel any prior
   //    in-flight request so we never apply a stale result to a new filter.
+  // Layout pipeline:
+  // 1. Render immediately at cheap seed positions (file circle + jittered
+  //    children). Always < 5ms even for 10k nodes.
+  // 2. Kick off a fresh worker to refine via Barnes-Hut. Terminating the
+  //    previous worker cancels any superseded run, so we never apply stale
+  //    positions to a new filter.
   useEffect(() => {
     if (!data || data.nodes.length === 0) {
       setPosMap({});
@@ -134,7 +140,37 @@ export function Graph() {
       size: n.size,
     }));
     requestNodesRef.current = reqNodes;
-    layoutWorkerRef.current?.postMessage({
+
+    const worker = new Worker(new URL("./layoutWorker.ts", import.meta.url), {
+      type: "module",
+      name: "biturbo-layout",
+    });
+    const onMessage = (ev: MessageEvent<LayoutResult | LayoutProgress | LayoutError>) => {
+      const m = ev.data;
+      if (!m || m.requestId !== reqId) return;
+      if (m.type === "progress" || m.type === "result") {
+        const raw: unknown = m.positions;
+        const posMapFromWorker: Record<string, Pos> = Array.isArray(raw)
+          ? Object.fromEntries(
+              requestNodesRef.current
+                .map((n, i) => [n.uid, raw[i]] as [string, Pos | undefined])
+                .filter((entry): entry is [string, Pos] => entry[1] != null),
+            )
+          : (raw as Record<string, Pos>);
+        setPosMap(posMapFromWorker);
+        if (m.type === "result") {
+          setLayoutMs(Math.round(m.elapsedMs));
+          send(
+            "info",
+            `[graph] layout refined · ${m.iterationsDone} iters · ${Math.round(m.elapsedMs)}ms`,
+          );
+        }
+      } else if (m.type === "error") {
+        send("error", `[graph] layout failed: ${m.message}`);
+      }
+    };
+    worker.addEventListener("message", onMessage);
+    worker.postMessage({
       type: "layout",
       requestId: reqId,
       nodes: reqNodes,
@@ -144,6 +180,10 @@ export function Graph() {
       iterations: 120,
       prevPositions: seed,
     } satisfies LayoutRequest);
+    return () => {
+      worker.removeEventListener("message", onMessage);
+      worker.terminate();
+    };
   }, [data]);
 
   useEffect(() => {
@@ -169,40 +209,6 @@ export function Graph() {
     }
   }, [size, data, posMap, view, hover, query, firstPaintMs]);
 
-  // Worker is module-level so we share one instance across renders and
-  // attach exactly one message handler.
-  useEffect(() => {
-    const w = ensureLayoutWorker();
-    layoutWorkerRef.current = w;
-    const onMessage = (ev: MessageEvent<LayoutResult | LayoutProgress | LayoutError>) => {
-      const m = ev.data;
-      if (!m) return;
-      if (m.type === "progress" || m.type === "result") {
-        // The worker returns positions as an array parallel to the request's
-        // node order; convert to the uid-keyed map the renderer uses.
-        const raw: unknown = m.positions;
-        const posMapFromWorker: Record<string, Pos> = Array.isArray(raw)
-          ? Object.fromEntries(
-              requestNodesRef.current
-                .map((n, i) => [n.uid, raw[i]] as [string, Pos | undefined])
-                .filter((entry): entry is [string, Pos] => entry[1] != null),
-            )
-          : (raw as Record<string, Pos>);
-        setPosMap(posMapFromWorker);
-        if (m.type === "result") {
-          setLayoutMs(Math.round(m.elapsedMs));
-          send(
-            "info",
-            `[graph] layout refined · ${m.iterationsDone} iters · ${Math.round(m.elapsedMs)}ms`,
-          );
-        }
-      } else if (m.type === "error") {
-        send("error", `[graph] layout failed: ${m.message}`);
-      }
-    };
-    w.addEventListener("message", onMessage);
-    return () => w.removeEventListener("message", onMessage);
-  }, []);
 
   async function reload() {
     setFirstPaintMs(null);
@@ -810,20 +816,9 @@ function hash32(s: string): number {
 }
 
 // ───────── Web Worker plumbing ─────────
-// One worker, lazily spawned. Cached on `window` so HMR doesn't double-spawn.
-function ensureLayoutWorker(): Worker {
-  const w = window as unknown as { __biturboLayoutWorker?: Worker };
-  if (w.__biturboLayoutWorker) return w.__biturboLayoutWorker;
-  const worker = new Worker(new URL("./layoutWorker.ts", import.meta.url), {
-    type: "module",
-    name: "biturbo-layout",
-  });
-  w.__biturboLayoutWorker = worker;
-  return worker;
-}
-
+// Request id sequence so we can ignore any late messages from a
+// terminated worker.
 const layoutReqSeq = { current: 0 };
-const layoutWorkerRef: { current: Worker | null } = { current: null };
 
 // Send log via the same Tauri channel main.tsx uses.
 function send(level: "info" | "warn" | "error", ...args: unknown[]) {
