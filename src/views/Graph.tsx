@@ -166,7 +166,7 @@ export function Graph() {
           );
         }
       } else if (m.type === "error") {
-        send("error", `[graph] layout failed: ${m.message}`);
+        showToast({ kind: "err", text: `Graph layout failed: ${m.message}` });
       }
     };
     worker.addEventListener("message", onMessage);
