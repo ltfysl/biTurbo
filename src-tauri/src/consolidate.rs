@@ -215,7 +215,11 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
             let by_uid: std::collections::HashMap<&str, &(String, String, f64)> =
                 rows.iter().map(|r| (r.0.as_str(), r)).collect();
             let texts: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
-            let embeddings = state.embedder_for_project(&pid)?.embed_batch(&texts)?;
+            let embeddings = state
+                .embedder_for_project(&pid)?
+                // Bulk dedup should not evict user query embeddings from the
+                // LRU cache; use the cache-bypassing path (#452).
+                .embed_batch_uncached(&texts)?;
             for (i, vec) in embeddings.iter().enumerate() {
                 let a = &rows[i];
                 let hits = idx.search(vec, 5, None)?;
