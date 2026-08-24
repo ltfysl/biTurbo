@@ -573,7 +573,7 @@ pub fn ingest_project_controlled(
                 let n = batch.len();
                 let placeholders = vec!["(?,?,?,?,?,?)"; n].join(",");
                 let sql = format!(
-                    "INSERT INTO code_edges(project_id, from_uid, to_uid, edge_type, weight, created_at) VALUES {placeholders}"
+                    "INSERT OR IGNORE INTO code_edges(project_id, from_uid, to_uid, edge_type, weight, created_at) VALUES {placeholders}"
                 );
                 let mut stmt = tx.prepare_cached(&sql)?;
                 let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(n * 6);

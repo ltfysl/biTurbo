@@ -339,6 +339,10 @@ CREATE TABLE IF NOT EXISTS code_edges (
 CREATE INDEX IF NOT EXISTS idx_code_edges_project ON code_edges(project_id);
 CREATE INDEX IF NOT EXISTS idx_code_edges_from ON code_edges(from_uid);
 CREATE INDEX IF NOT EXISTS idx_code_edges_to ON code_edges(to_uid);
+-- Duplicate-edge guard (#236): interleaved ingests must not accumulate
+-- identical (project, from, to, type) rows; ingest inserts with OR IGNORE.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_code_edges_unique
+    ON code_edges(project_id, from_uid, to_uid, edge_type);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     uid UNINDEXED,
