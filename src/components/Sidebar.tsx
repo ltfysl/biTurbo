@@ -15,6 +15,8 @@ import { api } from "../lib/api";
 import type { ContextMenuItem } from "./ContextMenu";
 import clsx from "clsx";
 import { friendlyError } from "../lib/format";
+// (#351) Tag manager (rename/merge/delete across project) and command-palette entry point pending.
+
 
 const nav = [
   { id: "overview", label: "Overview", icon: LayoutGrid },

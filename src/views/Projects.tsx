@@ -13,6 +13,8 @@ import type { ContextMenuItem } from "../components/ContextMenu";
 
 // (#60) Embed model is changed through an in-app modal, not window.prompt.
 // (#69) Running ingest jobs can be cancelled with a backend request.
+// (#344) Operations history view (list/retry/cancel) pending.
+
 export function Projects() {
   const projects = useApp((s) => s.projects);
   const refreshProjects = useApp((s) => s.refreshProjects);

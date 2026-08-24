@@ -31,6 +31,9 @@ export function Memories() {
 // (#37) Sort dropdown orders by newest/oldest/importance.
 // (#39) Search depth is adjustable via searchK instead of a hard-coded 50.
 // (#41) Forgetting a memory also refreshes the tag list so stale filters vanish.
+// (#352) Bulk actions toolbar (multi-select retag/retype/move/export/forget) pending.
+// (#353) Date-range and access-based filtering (created/last_access/access_count) pending.
+
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);

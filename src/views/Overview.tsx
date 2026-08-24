@@ -23,6 +23,8 @@ import clsx from "clsx";
 import { Kbd } from "../lib/kbd";
 import type { ActivityEntry } from "../lib/types";
 
+// (#345) Consolidation dashboard with duplicate review queue pending.
+
 const DAY_MS = 24 * 3600 * 1000;
 
 const ACTION_ICONS: Record<string, LucideIcon> = {

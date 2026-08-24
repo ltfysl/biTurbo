@@ -17,6 +17,9 @@ import type { ConfirmOptions } from "../components/ConfirmModal";
 import type { ContextMenuItem } from "../components/ContextMenu";
 
 // (#296) startIngest/cancelIngest removed from the store; views call ingest APIs directly.
+// (#342, #347, #349, #353) Pending: command palette, all-projects browse mode,
+// saved searches / smart folders, and time/access-based filters.
+
 export type View = "overview" | "memories" | "projects" | "graph" | "agents" | "settings";
 export type Theme = "dark" | "light" | "system";
 

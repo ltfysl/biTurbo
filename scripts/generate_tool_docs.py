@@ -54,7 +54,7 @@ def main():
         "# biTurbo MCP Tools",
         "",
         f"This table is generated from `src-tauri/src/mcp.rs` (`SCHEMAS_JSON`).",
-        "It is the single source of truth for the {total} tools exposed by the MCP server.",
+        f"It is the single source of truth for the {total} tools exposed by the MCP server.",
         "",
         "Run `python3 scripts/generate_tool_docs.py` to regenerate.",
         "",

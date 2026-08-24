@@ -8,6 +8,8 @@
 // Issue #297: batch_remember — bulk memory writes in one call.
 
 // Issue #332: Secret scrubber for remember / update / import paths.
+// Issue #350: Soft-delete trash with restore window and auto-purge pending.
+
 
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
