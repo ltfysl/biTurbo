@@ -96,6 +96,7 @@ class McpClient {
     this.proc.stdin.on("error", (err) => {
       this.rejectPending(new Error(`biturbo-mcp stdin error: ${err.message}`));
     });
+    // (#543) Reject in-flight RPCs when the child process or its stdin dies instead of crashing.
     this.proc.stderr.on("data", (chunk: Buffer) => {
       const s = chunk.toString("utf8");
       if (process.env.MCP_TEST_VERBOSE) process.stderr.write(`[mcp-stderr] ${s}`);
