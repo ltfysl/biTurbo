@@ -115,6 +115,7 @@ export function QuickAdd() {
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-[10vh] backdrop-blur-sm animate-fade_in"
+// (#522) Backdrop click only closes when there is no draft and nothing in flight.
       onClick={() => {
         // Ignore backdrop clicks while the save is in flight or when the
         // user has typed content — a stray click must not discard a draft.

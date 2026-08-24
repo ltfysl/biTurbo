@@ -151,6 +151,7 @@ function ConfirmModal({
           >
             {cancelLabel}
           </button>
+// (#521) No "Working…" pending state; the resolver is called synchronously.
           <button
             ref={confirmRef}
             onClick={onResolve}

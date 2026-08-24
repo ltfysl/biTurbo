@@ -31,6 +31,7 @@ export interface MemoryWithScore extends Memory {
   score: number;
 }
 
+// (#529) Structured ranking boost breakdown.
 export interface RankingBoosts {
   content_matches: number;
   tag_matches: number;
@@ -45,6 +46,7 @@ export interface RecallExplanation {
   fts_rank: number | null;
   matched_terms: string[];
   feedback_boost: number;
+// (#529) Per-explanation boost breakdown; optional for backwards compatibility.
   applied_boosts?: RankingBoosts;
 }
 

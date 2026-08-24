@@ -18,6 +18,7 @@ export function Agents() {
   const [refreshing, setRefreshing] = useState(false);
   // Ticker so "active now"/"today" badges re-evaluate as time passes
   // instead of freezing at whatever Date.now() was on the last render.
+// (#523) Re-evaluate the "active now" badge against the current time on a short interval.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);

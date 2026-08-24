@@ -49,6 +49,7 @@ function ContextMenu({
   // Clamp to the viewport. Runs as a layout effect so the first paint is
   // already clamped (no one-frame flash at the raw cursor coords), and
   // re-runs on resize/scroll so the menu can't strand off-screen.
+// (#520) Position hidden, measure, then show; re-clamp on resize/scroll.
   useLayoutEffect(() => {
     const clamp = () => {
       const el = ref.current;

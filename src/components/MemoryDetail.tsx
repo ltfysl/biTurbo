@@ -61,6 +61,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
   // If the same memory is updated externally while we're looking at it,
   // reseed the drafts (when not editing) or surface a conflict notice.
+// (#517) Stale-draft guard: re-seed or surface a conflict when the memory changes elsewhere.
   useEffect(() => {
     if (memory.updated_at === lastUpdatedAtRef.current) return;
     if (editing) {
@@ -107,7 +108,9 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   }, [memory.uid, memory.project_id]);
 
   async function save() {
+// (#524) Reject duplicate concurrent save requests.
     if (saving || conflict) return;
+// (#519) Reject empty or whitespace-only content.
     if (!draft.trim()) {
       showToast({ kind: "err", text: "Content cannot be empty" });
       return;

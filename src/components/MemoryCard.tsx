@@ -19,6 +19,7 @@ interface MemoryCardProps {
   score?: number;
 }
 
+// (#518) Only compare stable fields so inline callbacks don't defeat memo().
 function arePropsEqual(prev: MemoryCardProps, next: MemoryCardProps) {
   return (
     prev.memory.uid === next.memory.uid &&
