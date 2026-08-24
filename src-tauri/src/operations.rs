@@ -219,7 +219,27 @@ pub fn recover_interrupted(state: &AppState) -> BiResult<usize> {
         })?;
         fs4::fs_std::FileExt::unlock(&lock)?;
     }
+    prune_operation_locks(state);
     Ok(recovered)
+}
+fn prune_operation_locks(state: &AppState) {
+    let locks_dir = state.data_dir.join("operation-locks");
+    if !locks_dir.is_dir() {
+        return;
+    }
+    let threshold = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(&locks_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue; };
+        let Ok(modified) = meta.modified() else { continue; };
+        if let Ok(age) = std::time::SystemTime::now().duration_since(modified) {
+            if age > threshold {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 pub fn start_ingest(state: &AppState, project_id: &str, root: &Path) -> BiResult<Operation> {
