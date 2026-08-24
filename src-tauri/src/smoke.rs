@@ -1,6 +1,8 @@
 //! Integration smoke tests exercising AppState end-to-end without the GUI.
 //! Covers remember/search, debounced index flush, ingest, and MCP-style
 //! persistence (AppState::open spawns the flusher thread in every process).
+// Issue #391: run recall-eval as a CI gate and record metric history.
+
 
 #[cfg(test)]
 mod tests {

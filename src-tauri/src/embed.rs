@@ -187,9 +187,13 @@ fn resolve_model(name: &str) -> BiResult<(EmbeddingModel, &'static str, usize)> 
         "BGE-base-en-v1.5" | "BGE-base-en" => (EmbeddingModel::BGEBaseENV15, "BGE-base-en-v1.5", 768),
         "BGE-large-en-v1.5" | "BGE-large-en" => (EmbeddingModel::BGELargeENV15, "BGE-large-en-v1.5", 1024),
         "all-MiniLM-L6-v2" => (EmbeddingModel::AllMiniLML6V2, "all-MiniLM-L6-v2", 384),
+        // Issue #377: multilingual E5 models. bge-m3 is not yet in fastembed.
+        "multilingual-e5-small" => (EmbeddingModel::MultilingualE5Small, "multilingual-e5-small", 384),
+        "multilingual-e5-base" => (EmbeddingModel::MultilingualE5Base, "multilingual-e5-base", 768),
+        "multilingual-e5-large" => (EmbeddingModel::MultilingualE5Large, "multilingual-e5-large", 1024),
         other => {
             return Err(BiError::Embed(format!(
-                "unsupported model {other}; supported: BGE-small-en-v1.5, BGE-base-en-v1.5, BGE-large-en-v1.5, all-MiniLM-L6-v2"
+                "unsupported model {other}; supported: BGE-small-en-v1.5, BGE-base-en-v1.5, BGE-large-en-v1.5, all-MiniLM-L6-v2, multilingual-e5-small, multilingual-e5-base, multilingual-e5-large"
             )))
         }
     })

@@ -1,3 +1,6 @@
+// Issue #383: add `hello` tool returning server info, workflow, and unread digest.
+// Issue #384: token-bucket rate limits per agent on writes, ingests, and recall.
+
 use crate::error::{BiError, BiResult};
 use crate::ingest;
 use crate::memory::{self, Memory, MemoryWithScore, RememberInput, UpdateInput};
@@ -153,7 +156,7 @@ const MCP_INSTRUCTIONS: &str = r#"## biTurbo Memory Layer
 
 Use `register_agent` and `list_projects` at session start. Before non-trivial work, call `recall_for_context` with the active project. Store only durable facts, decisions, preferences, patterns, episodes, reflections, or indexed code; never store secrets or transient state. Always pass `project_id` to preserve isolation.
 
-The 27-tool public surface includes compatible memory/project APIs plus explainable recall (`recall_explain`, `submit_recall_feedback`) and supervised operations (`start_ingest`, `operation_status`, `list_operations`, `cancel_operation`, `retry_operation`). Legacy `ingest_project` and `consolidate` remain synchronous."#;
+The 34-tool public surface includes compatible memory/project APIs plus explainable recall (`recall_explain`, `submit_recall_feedback`) and supervised operations (`start_ingest`, `operation_status`, `list_operations`, `cancel_operation`, `retry_operation`). Legacy `ingest_project` and `consolidate` remain synchronous."#;
 
 async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<Vec<Value>> {
     let text = |v: &str| vec![json!({ "type": "text", "text": v })];
@@ -669,7 +672,14 @@ const SCHEMAS_JSON: &str = r#"[
 {"name":"bootstrap","description":"One-call page mount: stats + projects + recent + tags + agents + consolidate status.","inputSchema":{"type":"object","properties":{}}},
 {"name":"recent_activity","description":"Recent activity entries.","inputSchema":{"type":"object","properties":{"limit":{"type":"number"}}}},
 {"name":"register_agent","description":"Register or update this agent's record. Call once per session.","inputSchema":{"type":"object","required":["name","kind"],"properties":{"name":{"type":"string"},"kind":{"type":"string"},"meta":{"type":"object"}}}},
-{"name":"get_project_name_from_file","description":"Read projectName from .biTurbo file in project root. Returns {\"projectName\": \"...\"} or {\"error\": \"...\"}.","inputSchema":{"type":"object","required":["root_path"],"properties":{"root_path":{"type":"string"}}}}
+{"name":"get_project_name_from_file","description":"Read projectName from .biTurbo file in project root. Returns {\"projectName\": \"...\"} or {\"error\": \"...\"}.","inputSchema":{"type":"object","required":["root_path"],"properties":{"root_path":{"type":"string"}}}},
+{"name":"get_project_graph","description":"Return a project graph with nodes and edges.","inputSchema":{"type":"object","required":["project_id"],"properties":{"project_id":{"type":"string"}}}},
+{"name":"import_folder","description":"Import memories from a folder into a project.","inputSchema":{"type":"object","required":["project_id","root_path"],"properties":{"project_id":{"type":"string"},"root_path":{"type":"string"}}}},
+{"name":"export_memories","description":"Export project memories (or all if project_id omitted) to a relative output_path.","inputSchema":{"type":"object","required":["output_path"],"properties":{"project_id":{"type":"string"},"output_path":{"type":"string"},"overwrite":{"type":"boolean"}}}},
+{"name":"enable_watch","description":"Watch a project root path for filesystem changes.","inputSchema":{"type":"object","required":["project_id","root_path"],"properties":{"project_id":{"type":"string"},"root_path":{"type":"string"}}}},
+{"name":"disable_watch","description":"Stop watching a project.","inputSchema":{"type":"object","required":["project_id"],"properties":{"project_id":{"type":"string"}}}},
+{"name":"watch_status","description":"List currently watched project roots.","inputSchema":{"type":"object","properties":{}}},
+{"name":"set_project_embed_model","description":"Set the embedding model for a project (null to reset to default).","inputSchema":{"type":"object","required":["project_id"],"properties":{"project_id":{"type":"string"},"model":{"type":"string"}}}}
 ]"#;
 
 #[cfg(test)]

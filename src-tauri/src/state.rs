@@ -1,4 +1,6 @@
 //! Shared application state. Lives in the Tauri-managed container; cloned into
+// Issue #381: make index_memory_budget, QUERY_CACHE_CAP, EMBED_BATCH, PARSE_POOL configurable.
+
 //! background tasks. The standalone MCP binary builds its own from the same data dir.
 
 use crate::db::Db;

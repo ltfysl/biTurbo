@@ -1,5 +1,8 @@
 //! Multi-project isolation. Each project gets its own turbovec index and a row in
 //! the projects table. The "default" project is auto-created on first run.
+// Issue #389: per-project scratchpad (LWW key-value working memory, excluded from search).
+// Issue #387: project templates for rust-service / nextjs-app / python-lib onboarding.
+
 
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
