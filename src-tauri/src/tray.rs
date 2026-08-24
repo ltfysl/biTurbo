@@ -2,7 +2,6 @@
 //! folder, quit, and hide-on-close.
 // (#362) Configurable global shortcut and always-on-top quick-capture popover pending.
 
-
 use std::time::Duration;
 
 use tauri::{
