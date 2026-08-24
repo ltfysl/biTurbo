@@ -101,6 +101,16 @@ pub fn list(state: &AppState, limit: usize) -> BiResult<Vec<Operation>> {
     )?;
     Ok(rows.filter_map(Result::ok).collect())
 }
+fn list_queued(state: &AppState) -> BiResult<Vec<Operation>> {
+    let conn = state.db.conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, project_id, status, phase, current, total, checkpoint,
+                result, error, cancel_requested, created_at, updated_at, started_at, finished_at
+         FROM operations WHERE status = 'queued' ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], row_to_operation)?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
 
 pub fn mark_running(state: &AppState, id: &str) -> BiResult<()> {
     let now = chrono::Utc::now().timestamp_millis();
@@ -450,7 +460,7 @@ pub fn retry(state: &AppState, id: &str) -> BiResult<Operation> {
 
 pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
     recover_interrupted(&state)?;
-    let pending = list(&state, 500)?;
+    let pending = list_queued(&state)?;
     let mut resumed = 0;
     for operation in pending.into_iter().filter(|op| op.status == "queued") {
         // Avoid duplicate execution when GUI and MCP binaries share a data
@@ -496,23 +506,46 @@ pub fn resume_pending(state: Arc<AppState>) -> BiResult<usize> {
                 resumed += 1;
             }
             "multi_ingest" => {
-                let projects = operation
+                let projects = match operation
                     .checkpoint
                     .as_ref()
                     .and_then(|value| value.get("projects"))
                     .and_then(|value| value.as_array())
-                    .map(|projects| {
-                        projects
-                            .iter()
-                            .filter_map(|project| {
-                                Some((
-                                    project.get("project_id")?.as_str()?.to_string(),
-                                    PathBuf::from(project.get("root_path")?.as_str()?),
-                                ))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                {
+                    Some(array) => {
+                        let mut out = Vec::with_capacity(array.len());
+                        let mut bad = false;
+                        for project in array {
+                            let project_id = project.get("project_id").and_then(|v| v.as_str());
+                            let root = project
+                                .get("root_path")
+                                .and_then(|v| v.as_str())
+                                .map(PathBuf::from);
+                            if let (Some(pid), Some(root)) = (project_id, root) {
+                                out.push((pid.to_string(), root));
+                            } else {
+                                bad = true;
+                            }
+                        }
+                        if bad {
+                            fail(
+                                &state,
+                                &operation.id,
+                                "queued multi-ingest has malformed project entries",
+                            )?;
+                            continue;
+                        }
+                        out
+                    }
+                    None => {
+                        fail(
+                            &state,
+                            &operation.id,
+                            "queued multi-ingest has no projects checkpoint",
+                        )?;
+                        continue;
+                    }
+                };
                 if projects.is_empty() {
                     fail(&state, &operation.id, "queued multi-ingest has no projects")?;
                     continue;
