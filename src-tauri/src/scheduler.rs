@@ -151,7 +151,7 @@ pub fn run_now_blocking(state: &AppState) -> BiResult<ConsolidateReport> {
         }
         g.running = true;
     }
-    let result = consolidate::consolidate(state, None);
+    let result = consolidate::consolidate(state, None, None);
     let now = chrono::Utc::now().timestamp_millis();
     {
         let mut g = STATE.lock();
@@ -224,7 +224,7 @@ async fn run_once(state: Arc<AppState>, job: Option<ManualJob>) {
     // runtime worker thread (#461).
     let blocking_state = Arc::clone(&state);
     let result = tokio::task::spawn_blocking(move || {
-        consolidate::consolidate(&blocking_state, project_id.as_deref())
+        consolidate::consolidate(&blocking_state, project_id.as_deref(), None)
     })
     .await
     .unwrap_or_else(|e| {
