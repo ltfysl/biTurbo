@@ -141,7 +141,7 @@ impl AppState {
                     }
                     Err(e) => {
                         // A bad projects row must not abort startup: in release
-                        // builds a panic here (panic=abort) bricks every launch.
+                        // builds a panic here (panic=abort) bricks every launch (#413).
                         tracing::error!("failed to create index for project '{pid}': {e}");
                         continue;
                     }
