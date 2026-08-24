@@ -3,7 +3,7 @@ import clsx from "clsx";
 
 /**
  * Toast stack. Queued (up to 4 visible), announced to assistive tech via
- * aria-live, with optional action buttons (e.g. Retry / Reveal).
+ * aria-live (#14), with optional action buttons (e.g. Retry / Reveal).
  */
 export function Toast() {
   const toasts = useApp((s) => s.toasts);
