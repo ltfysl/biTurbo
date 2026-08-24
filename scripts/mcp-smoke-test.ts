@@ -421,6 +421,7 @@ const tests: TestCase[] = [
     tool: "cancel_operation",
     args: () => ({ id: OPERATION_HOLDER.id ?? "" }),
     expect: (r) => {
+      // (#537) Cancel after an instant empty ingest may already be terminal; isError is a valid outcome.
       if (isErrorResult(r)) return true;
       const j = extractJson(r) as { id?: string } | null;
       return j?.id === OPERATION_HOLDER.id || "cancel returned wrong operation";
