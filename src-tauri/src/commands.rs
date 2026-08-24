@@ -572,31 +572,20 @@ fn write_config(path: &std::path::Path, content: &str) -> BiResult<()> {
     })
 }
 
-#[tauri::command]
-pub fn install_mcp_config(
-    _state: State<'_, AppState>,
-    args: InstallMcpConfigArgs,
-) -> BiResult<InstallMcpConfigResult> {
-    let bin = resolve_mcp_binary_path();
-    let bin_path = &bin.path;
-
+/// Resolve the agent-specific MCP config path and its on-disk format.
+fn mcp_target_config_path(target: &str) -> BiResult<(std::path::PathBuf, &'static str)> {
     let home = dirs::home_dir()
         .ok_or_else(|| crate::error::BiError::Invalid("cannot resolve home directory".into()))?;
-
-    let (config_path, format): (std::path::PathBuf, &str) = match args.target.as_str() {
+    Ok(match target {
         "cursor" => (home.join(".cursor").join("mcp.json"), "json-cursor"),
         "windsurf" => (
-            home.join(".codeium")
-                .join("windsurf")
-                .join("mcp_config.json"),
+            home.join(".codeium").join("windsurf").join("mcp_config.json"),
             "json-cursor",
         ),
         "claude" => (home.join(".claude.json"), "json-cursor"),
         "opencode" => {
             let base = if cfg!(target_os = "macos") {
-                home.join("Library")
-                    .join("Application Support")
-                    .join("opencode")
+                home.join("Library").join("Application Support").join("opencode")
             } else {
                 home.join(".config").join("opencode")
             };
@@ -608,7 +597,17 @@ pub fn install_mcp_config(
                 "unknown target: {other}"
             )))
         }
-    };
+    })
+}
+#[tauri::command]
+pub fn install_mcp_config(
+    _state: State<'_, AppState>,
+    args: InstallMcpConfigArgs,
+) -> BiResult<InstallMcpConfigResult> {
+    let bin = resolve_mcp_binary_path();
+    let bin_path = &bin.path;
+
+    let (config_path, format) = mcp_target_config_path(&args.target)?;
 
     // Create parent dirs
     if let Some(parent) = config_path.parent() {
@@ -673,6 +672,39 @@ pub fn install_mcp_config(
         created: !existed,
         merged: existed,
     })
+}
+
+#[derive(Deserialize)]
+pub struct McpConfigStatusArgs {
+    pub target: String,
+}
+
+/// Probe whether the biturbo MCP config already exists for a target.
+/// Returns true if the target's config file contains the biturbo entry.
+#[tauri::command]
+pub fn mcp_config_status(
+    _state: State<'_, AppState>,
+    args: McpConfigStatusArgs,
+) -> BiResult<bool> {
+    let (config_path, format) = mcp_target_config_path(&args.target)?;
+    if !config_path.exists() {
+        return Ok(false);
+    }
+    match format {
+        "json-cursor" => {
+            let root = read_json_config(&config_path).unwrap_or(serde_json::json!({}));
+            Ok(root.get("mcpServers").and_then(|s| s.get("biturbo")).is_some())
+        }
+        "json-opencode" => {
+            let root = read_json_config(&config_path).unwrap_or(serde_json::json!({}));
+            Ok(root.get("mcp").and_then(|s| s.get("biturbo")).is_some())
+        }
+        "toml-codex" => {
+            let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+            Ok(content.contains("[mcp_servers.biturbo]"))
+        }
+        _ => Ok(false),
+    }
 }
 
 #[derive(Serialize)]

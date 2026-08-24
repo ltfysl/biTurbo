@@ -205,6 +205,19 @@ ${end}`;
     { id: "opencode", label: "OpenCode" },
   ] as const;
 
+  useEffect(() => {
+    Promise.all(
+      mcpTargets.map((t) =>
+        api.mcpConfigStatus(t.id)
+          .then((installed) => ({ id: t.id, installed }))
+          .catch(() => ({ id: t.id, installed: false })),
+      ),
+    ).then((results) => {
+      const installed = new Set(results.filter((r) => r.installed).map((r) => r.id));
+      setMcpInstalled(installed);
+    });
+  }, []);
+
   async function installMcp(target: string, label: string) {
     setMcpInstalling((s) => new Set(s).add(target));
     try {

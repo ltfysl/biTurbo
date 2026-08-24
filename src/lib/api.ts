@@ -202,4 +202,6 @@ export const api = {
       "install_mcp_config",
       { args: { target } },
     ),
+  mcpConfigStatus: (target: string) =>
+    invoke<boolean>("mcp_config_status", { args: { target } }),
 };

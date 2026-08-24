@@ -232,6 +232,7 @@ pub fn run() {
             commands::bootstrap,
             commands::resolve_mcp_binary_path,
             commands::install_mcp_config,
+            commands::mcp_config_status,
             commands::check_for_updates,
             commands::install_update,
         ])
