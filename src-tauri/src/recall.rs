@@ -65,6 +65,8 @@ pub fn explain(
         None
     };
     if allowlist.as_ref().is_some_and(Vec::is_empty) {
+        // No candidates for this mem_type: avoid turbovec's empty-allowlist
+        // panic and skip loading an embedding model (#433).
         return Ok(RecallResponse {
             recall_id,
             results: Vec::new(),
@@ -262,9 +264,10 @@ pub(crate) fn apply_ranking_boost(
     terms: &[String],
 ) -> f32 {
     let boosts = ranking_boosts(memory, terms);
+    // #441: keep importance and feedback as multipliers of the small RRF
+    // base score so additive terms do not dominate query relevance.
     base_score * (boosts.multiplier + boosts.importance_boost)
 }
-
 pub fn submit_feedback(
     state: &AppState,
     recall_id: &str,

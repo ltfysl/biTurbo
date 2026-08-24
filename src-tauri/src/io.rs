@@ -160,7 +160,7 @@ pub fn export_memories(
     project_id: Option<&str>,
     output_path: &Path,
 ) -> BiResult<ExportResult> {
-    // Confine exports beneath the app data dir (#481, cf. #418): callers must
+    // Confine exports beneath the app data dir (#418, #481): callers must
     // not be able to create or clobber arbitrary user-writable files.
     let exports_dir = state.data_dir.join("exports");
     std::fs::create_dir_all(&exports_dir)

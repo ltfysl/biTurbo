@@ -138,7 +138,8 @@ pub fn update_progress(
     let now = chrono::Utc::now().timestamp_millis();
     let checkpoint = checkpoint.map(serde_json::Value::to_string);
     // Throttle DB writes and event emissions to at most one per 250 ms unless
-    // the phase or progress changed (#429).
+    // the phase or progress changed; the status predicate makes a late tick
+    // after a terminal state a no-op (#415, #429).
     if let Ok(last) = get(state, id) {
         let same_phase = last.phase.as_deref() == Some(phase);
         let same_progress =
@@ -1010,6 +1011,7 @@ fn update_status(
     let result = result.map(serde_json::Value::to_string);
     let terminal = matches!(status, "succeeded" | "failed" | "cancelled");
     state.db.write(|tx| {
+        // Guard: terminal rows cannot be overwritten by a late status update (#415).
         let changed = tx.execute(
             "UPDATE operations SET status = ?1, phase = COALESCE(?2, phase), result = ?3,
                  error = ?4, updated_at = ?5,
