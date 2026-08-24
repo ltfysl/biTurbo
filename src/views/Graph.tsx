@@ -54,6 +54,7 @@ export function Graph() {
   const showToast = useApp((s) => s.showToast);
   const setSelected = useApp((s) => s.setSelectedMemoryUid);
   const showMenu = useContextMenu();
+  // (#363) Graph ergonomics: node kind + edge filters, wheel zoom, and pan; fit, minimap, pinning, PNG export, touch pending.
   const [filter, setFilter] = useState<Set<string>>(new Set(NODE_KINDS));
   const [edgeFilter, setEdgeFilter] = useState<Set<string>>(new Set(Object.keys(EDGE_COLORS)));
   const [query, setQuery] = useState("");

@@ -216,6 +216,7 @@ export function Memories() {
     ];
   }
 
+  // (#354) Tag list with counts and show-all toggle; full tag browser with drill-down and co-occurrence pending.
   const [showAllTags, setShowAllTags] = useState(false);
   const visibleTagList = showAllTags ? tags : tags.slice(0, 20);
 

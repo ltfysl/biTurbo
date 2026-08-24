@@ -197,12 +197,16 @@ ${end}`;
       .catch(() => showToast({ kind: "err", text: "Clipboard blocked" }));
   }
 
+  // (#390) MCP one-click install targets now include VS Code, JetBrains, and Zed alongside Cursor/Windsurf/Claude/Codex/OpenCode.
   const mcpTargets = [
     { id: "cursor", label: "Cursor" },
     { id: "windsurf", label: "Windsurf" },
     { id: "claude", label: "Claude Code" },
     { id: "codex", label: "Codex" },
     { id: "opencode", label: "OpenCode" },
+    { id: "vscode", label: "VS Code" },
+    { id: "jetbrains", label: "JetBrains" },
+    { id: "zed", label: "Zed" },
   ] as const;
 
   useEffect(() => {

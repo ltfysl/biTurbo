@@ -18,6 +18,7 @@ export function QuickAdd() {
   const projects = useApp((s) => s.projects);
   const knownTags = useApp((s) => s.tags);
 
+  // (#355) QuickAdd parity: code type + file path/start line; language/end_line/supersedes picker and file dialog pending.
   const [content, setContent] = useState("");
   const [type, setType] = useState<(typeof TYPES)[number]>("fact");
   const [tags, setTags] = useState("");

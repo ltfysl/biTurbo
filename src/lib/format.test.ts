@@ -1,3 +1,4 @@
+// (#397) Frontend test harness baseline: vitest + format utility tests; expand to component/integration tests.
 import { describe, expect, it } from "vitest";
 import { bytes, truncatePath } from "./format";
 

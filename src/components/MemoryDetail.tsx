@@ -10,6 +10,7 @@ import clsx from "clsx";
 import { CodeBlock } from "./CodeBlock";
 
 export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () => void }) {
+  // (#357) In-place editing for content, tags, and importance; mem_type selector and project move pending.
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
