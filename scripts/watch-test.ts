@@ -68,6 +68,7 @@ class McpClient {
     if (process.env.VERBOSE) {
       console.log(`${COL.dim}[MCP] ${name} → ${JSON.stringify(r.result).slice(0, 200)}${COL.reset}`);
     }
+    // (#539) Tool-level errors fail fast so ingest/enable_watch results cannot be silently ignored.
     return r.result;
   }
 
