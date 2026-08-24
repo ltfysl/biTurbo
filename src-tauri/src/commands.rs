@@ -602,8 +602,8 @@ fn mcp_target_config_path(target: &str) -> BiResult<(std::path::PathBuf, &'stati
                     .join("Code")
                     .join("User")
             } else if cfg!(target_os = "windows") {
-                let appdata = std::env::var("APPDATA")
-                    .unwrap_or_else(|_| home.to_string_lossy().to_string());
+                let appdata =
+                    std::env::var("APPDATA").unwrap_or_else(|_| home.to_string_lossy().to_string());
                 std::path::PathBuf::from(appdata).join("Code").join("User")
             } else {
                 home.join(".config").join("Code").join("User")

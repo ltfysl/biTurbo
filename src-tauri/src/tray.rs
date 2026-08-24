@@ -14,7 +14,6 @@ use tauri_plugin_updater::UpdaterExt;
 
 use crate::state::AppState;
 
-
 const TRAY_ID: &str = "main-tray";
 const MENU_SHOW: &str = "tray_show";
 const MENU_HIDE: &str = "tray_hide";
@@ -27,7 +26,6 @@ const MENU_STATS_AGENTS: &str = "tray_stats_agents";
 const MENU_VERSION: &str = "tray_version";
 const MENU_CHECK_UPDATES: &str = "tray_check_updates";
 
-
 pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
     // — Stats (disabled info items, updated by background thread) —
     let stat_memories =
@@ -36,11 +34,14 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
         MenuItem::with_id(app, MENU_STATS_PROJECTS, "Projects: —", false, None::<&str>)?;
     let stat_agents = MenuItem::with_id(app, MENU_STATS_AGENTS, "Agents: —", false, None::<&str>)?;
     let version_label = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let version =
-        MenuItem::with_id(app, MENU_VERSION, &version_label, false, None::<&str>)?;
-    let check_updates =
-        MenuItem::with_id(app, MENU_CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
-
+    let version = MenuItem::with_id(app, MENU_VERSION, &version_label, false, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        MENU_CHECK_UPDATES,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
 
     let sep1 = PredefinedMenuItem::separator(app)?;
 
@@ -78,7 +79,6 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
             &quit,
         ],
     )?;
-
 
     let icon = app
         .default_window_icon()
@@ -118,8 +118,7 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
                         Ok(Some(update)) => {
                             let version = update.version.clone();
                             let install_app = app.clone();
-                            app
-                                .dialog()
+                            app.dialog()
                                 .message(format!("biTurbo {} is available. Install now?", version))
                                 .buttons(MessageDialogButtons::YesNo)
                                 .show(move |ok| {
@@ -135,7 +134,10 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
                                                     .map_err(|e| e.to_string())?;
                                                 if let Some(update) = update {
                                                     update
-                                                        .download_and_install(|_event, _progress| {}, || {})
+                                                        .download_and_install(
+                                                            |_event, _progress| {},
+                                                            || {},
+                                                        )
                                                         .await
                                                         .map_err(|e| e.to_string())?;
                                                     install_app.restart();
@@ -148,15 +150,13 @@ pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
                                 });
                         }
                         Ok(None) => {
-                            app
-                                .dialog()
+                            app.dialog()
                                 .message("biTurbo is up to date.")
                                 .buttons(MessageDialogButtons::Ok)
                                 .show(|_| {});
                         }
                         Err(e) => {
-                            app
-                                .dialog()
+                            app.dialog()
                                 .message(format!("Update check failed: {e}"))
                                 .buttons(MessageDialogButtons::Ok)
                                 .show(|_| {});

@@ -2,7 +2,6 @@
 // Issue #392: expand recall golden corpus (60 cases, nDCG/MRR/latency per class).
 // Issue #391: wire recall-eval into CI with threshold gating and trend artifacts.
 
-
 use crate::error::{BiError, BiResult};
 use crate::memory::{self, MemoryWithScore};
 use crate::state::AppState;

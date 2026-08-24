@@ -3,7 +3,6 @@
 // Issue #389: per-project scratchpad (LWW key-value working memory, excluded from search).
 // Issue #387: project templates for rust-service / nextjs-app / python-lib onboarding.
 
-
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;

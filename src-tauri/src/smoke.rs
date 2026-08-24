@@ -3,7 +3,6 @@
 //! persistence (AppState::open spawns the flusher thread in every process).
 // Issue #391: run recall-eval as a CI gate and record metric history.
 
-
 #[cfg(test)]
 mod tests {
     use crate::memory::{self, RememberInput};
