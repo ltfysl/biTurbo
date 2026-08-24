@@ -913,37 +913,34 @@ fn flush_chunk_insert(
     total_chunks: usize,
     now: i64,
 ) -> BiResult<()> {
-    // Collect uids first, deduped but in insertion order. The explicit
-    // DELETE below is required because `INSERT OR REPLACE` removes old rows
-    // without firing the memories_ad trigger (recursive_triggers is OFF),
-    // which would leave stale duplicate rows in memories_fts forever.
-    let mut uids: Vec<&str> = Vec::with_capacity(total_chunks);
     let mut seen = HashSet::new();
-    for pf in batch {
-        for c in &pf.chunks {
-            if seen.insert(c.uid.as_str()) {
-                uids.push(&c.uid);
-            }
-        }
-    }
-    for group in uids.chunks(500) {
-        let placeholders = vec!["?"; group.len()].join(",");
-        let sql = format!("DELETE FROM memories WHERE uid IN ({placeholders})");
-        tx.prepare_cached(&sql)?
-            .execute(rusqlite::params_from_iter(group.iter()))?;
-    }
     let placeholders = vec!["(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"; total_chunks].join(",");
     let sql = format!(
         "INSERT INTO memories
            (uid, project_id, mem_type, content, importance,
             created_at, updated_at, last_access, access_count,
             file_path, start_line, end_line, language, tags, source_agent)
-         VALUES {placeholders}"
+         VALUES {placeholders}
+         ON CONFLICT(uid) DO UPDATE SET
+           project_id = excluded.project_id,
+           mem_type = excluded.mem_type,
+           content = excluded.content,
+           importance = excluded.importance,
+           updated_at = excluded.updated_at,
+           file_path = excluded.file_path,
+           start_line = excluded.start_line,
+           end_line = excluded.end_line,
+           language = excluded.language,
+           tags = excluded.tags,
+           source_agent = excluded.source_agent"
     );
     let mut stmt = tx.prepare_cached(&sql)?;
     let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(total_chunks * 15);
     for pf in batch {
         for c in &pf.chunks {
+            if !seen.insert(c.uid.as_str()) {
+                continue;
+            }
             params.push(c.uid.clone().into());
             params.push(project_id.to_string().into());
             params.push("code".to_string().into());
