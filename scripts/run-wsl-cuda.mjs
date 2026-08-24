@@ -9,8 +9,8 @@
  *
  * Env: VITE_UI_ZOOM (default 1.75)
  */
-import { spawn } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { execSync, spawn } from "node:child_process";
+import { cpSync, existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,15 @@ const forceRebuild =
   process.env.BITURBO_FORCE_REBUILD === "1" ||
   process.argv.includes("--rebuild") ||
   process.argv.includes("-f");
+
+const targetTriple = execSync("rustc -vV", { encoding: "utf8" })
+  .match(/host:\s*(.+)/)?.[1]
+  .trim();
+if (!targetTriple) {
+  console.error("Could not determine rustc host target triple");
+  process.exit(1);
+}
+
 
 const pathParts = ["/usr/local/cuda/bin", process.env.PATH || ""].filter(Boolean);
 const libParts = [
@@ -100,14 +109,13 @@ function needsRebuild() {
 
   const binTime = mtime(bin);
   const frontendNewest = Math.max(
-    newestUnder(resolve(root, "src"), [".ts", ".tsx", ".css", ".html"]),
     mtime(resolve(root, "index.html")),
     mtime(resolve(root, "package.json")),
     mtime(resolve(root, "vite.config.ts")),
     mtime(resolve(root, "tailwind.config.js")),
     mtime(resolve(root, "tailwind.config.ts")),
+    newestUnder(resolve(root, "public"), [".png", ".svg", ".jpg", ".jpeg", ".webp", ".ico"]),
   );
-  if (frontendNewest > mtime(distIndex)) return "frontend sources newer than dist";
   // Tauri embeds dist at compile time — rebuild Rust if dist or Rust sources changed.
   const rustNewest = Math.max(
     newestUnder(resolve(root, "src-tauri/src"), [".rs"]),
@@ -135,6 +143,24 @@ async function rebuild() {
     "--bin",
     "biturbo",
   ]);
+  console.log(">> Building release biturbo-mcp sidecar (--features cuda)…");
+  await run("cargo", [
+    "build",
+    "--manifest-path",
+    "src-tauri/Cargo.toml",
+    "--release",
+    "--features",
+    "cuda",
+    "--bin",
+    "biturbo-mcp",
+  ]);
+  const sidecarSrc = resolve(root, "src-tauri/target/release/biturbo-mcp");
+  const sidecarDst = resolve(root, `src-tauri/binaries/biturbo-mcp-${targetTriple}`);
+  if (!existsSync(sidecarSrc)) {
+    throw new Error(`sidecar binary not found at ${sidecarSrc}`);
+  }
+  cpSync(sidecarSrc, sidecarDst, { force: true });
+  console.log(`>> Sidecar staged: ${sidecarDst}`);
 }
 
 async function main() {

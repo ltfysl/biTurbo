@@ -6,8 +6,6 @@ import type {
   AgentEntry,
   ActivityEntry,
   Stats,
-  IngestJob,
-  ConsolidateReport,
   ConsolidateStatus,
   GraphData,
   BootstrapPayload,
@@ -34,6 +32,7 @@ export interface UpdateInput {
   mem_type?: string | null;
   tags?: string[] | null;
   importance?: number | null;
+  updated_at?: number | null;
 }
 
 export const api = {
@@ -133,10 +132,6 @@ export const api = {
       projectId: project_id,
     }),
 
-  ingestProject: (project_id: string, root_path: string) =>
-    invoke<IngestJob>("ingest_project", {
-      args: { project_id, root_path },
-    }),
 
   startIngest: (project_id: string, root_path: string) =>
     invoke<Operation>("start_ingest", {
@@ -154,7 +149,7 @@ export const api = {
     }),
 
   consolidate: (project_id?: string | null) =>
-    invoke<ConsolidateReport>("consolidate_now", {
+    invoke<ConsolidateStatus>("consolidate_now", {
       projectId: project_id ?? null,
     }),
 
@@ -207,4 +202,6 @@ export const api = {
       "install_mcp_config",
       { args: { target } },
     ),
+  mcpConfigStatus: (target: string) =>
+    invoke<boolean>("mcp_config_status", { args: { target } }),
 };

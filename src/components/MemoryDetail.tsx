@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Memory } from "../lib/types";
 import { MEM_TYPE_META, timeAgo, shortDate, importanceDots, truncatePath, stripLeadingPathComment, friendlyError } from "../lib/format";
 import { api } from "../lib/api";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { useApp, useConfirm } from "../lib/store";
 import { X, Trash2, Edit3, Save, FileCode2, Hash, ChevronDown, ChevronUp } from "lucide-react";
 import clsx from "clsx";
@@ -11,6 +12,8 @@ import { CodeBlock } from "./CodeBlock";
 export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () => void }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const [draft, setDraft] = useState(memory.content);
   const [draftTags, setDraftTags] = useState(memory.tags.join(", "));
   const [draftImp, setDraftImp] = useState(memory.importance);
@@ -20,6 +23,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const draftCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
   const baselineCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
   const prevUidRef = useRef(memory.uid);
+  const lastUpdatedAtRef = useRef(memory.updated_at);
   const refreshMemories = useApp((s) => s.refreshMemories);
   const refreshTags = useApp((s) => s.refreshTags);
   const refreshStats = useApp((s) => s.refreshStats);
@@ -34,6 +38,8 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       tags: memory.tags.join(", "),
       imp: memory.importance,
     });
+    lastUpdatedAtRef.current = memory.updated_at;
+    setConflict(false);
     const prevUid = prevUidRef.current;
     if (prevUid === memory.uid) return;
     const base = baselineCache.current.get(prevUid);
@@ -53,7 +59,30 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
     prevUidRef.current = memory.uid;
   }, [memory.uid]);
 
+  // If the same memory is updated externally while we're looking at it,
+  // reseed the drafts (when not editing) or surface a conflict notice.
+// (#517) Stale-draft guard: re-seed or surface a conflict when the memory changes elsewhere.
   useEffect(() => {
+    if (memory.updated_at === lastUpdatedAtRef.current) return;
+    if (editing) {
+      setConflict(true);
+      showToast({ kind: "info", text: "This memory was updated elsewhere. Save or discard." });
+    } else {
+      setConflict(false);
+      setDraft(memory.content);
+      setDraftTags(memory.tags.join(", "));
+      setDraftImp(memory.importance);
+      baselineCache.current.set(memory.uid, {
+        content: memory.content,
+        tags: memory.tags.join(", "),
+        imp: memory.importance,
+      });
+    }
+    lastUpdatedAtRef.current = memory.updated_at;
+  }, [memory.updated_at, editing]);
+
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const hits = await api.search({
@@ -61,20 +90,32 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           query: memory.content.slice(0, 200),
           k: 6,
         });
+        if (cancelled) return;
         setRelated(
           hits
             .filter((h) => h.uid !== memory.uid)
             .slice(0, 5)
-            .map((h) => ({ uid: h.uid, content: h.content, score: h.score }))
+            .map((h) => ({ uid: h.uid, content: h.content, score: h.score })),
         );
       } catch {
         /* ignore */
       }
     })();
+    return () => {
+      cancelled = true;
+    };
     // Only re-search when selecting a different memory, not on every edit.
   }, [memory.uid, memory.project_id]);
 
   async function save() {
+// (#524) Reject duplicate concurrent save requests.
+    if (saving || conflict) return;
+// (#519) Reject empty or whitespace-only content.
+    if (!draft.trim()) {
+      showToast({ kind: "err", text: "Content cannot be empty" });
+      return;
+    }
+    setSaving(true);
     try {
       await api.update(memory.uid, {
         content: draft,
@@ -83,12 +124,15 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           .map((s) => s.trim())
           .filter(Boolean),
         importance: draftImp,
+        updated_at: memory.updated_at,
       });
       await refreshMemories();
       showToast({ kind: "ok", text: "Saved" });
       setEditing(false);
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -203,17 +247,28 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
             {expanded ? "Show less" : "Show more"}
           </button>
         )}
-
-        {/* Code location */}
         {memory.mem_type === "code" && memory.file_path && (
           <button
             type="button"
-            onClick={() => {
-              shellOpen(memory.file_path as string).catch((e) => {
-                showToast({ kind: "err", text: `Could not open file: ${String(e)}` });
-              });
+            onClick={async () => {
+              const p = memory.file_path as string;
+              try {
+                await openPath(p);
+              } catch (e) {
+                const msg = String(e);
+                // Fallback to unrestricted opener if scope blocks the path
+                if (msg.includes("Not allowed") || msg.includes("forbidden") || msg.includes("Forbidden")) {
+                  try {
+                    await invoke("open_file", { path: p });
+                    return;
+                  } catch (e2) {
+                    showToast({ kind: "err", text: `Could not open file: ${String(e2)}` });
+                    return;
+                  }
+                }
+                showToast({ kind: "err", text: `Could not open file: ${msg}` });
+              }
             }}
-            className="code-chip mt-3 w-full py-1.5 text-left text-[12px] transition hover:border-accent/50"
             title={`Open ${memory.file_path} in the default app`}
           >
             <FileCode2 size={12} className="shrink-0" />
@@ -341,15 +396,28 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       <div className="flex items-center gap-2 border-t border-border-subtle p-3">
         {editing ? (
           <>
-            {dirty && (
+            {dirty && !conflict && (
               <span className="text-[10px] uppercase tracking-widest text-warning">
                 Unsaved
               </span>
             )}
-            <button onClick={save} className="btn-primary flex-1">
-              <Save size={14} /> Save
+            {conflict && (
+              <span className="text-[10px] uppercase tracking-widest text-warning">
+                Out of date
+              </span>
+            )}
+            <button
+              onClick={save}
+              disabled={saving || !dirty || conflict || !draft.trim()}
+              className="btn-primary flex-1 disabled:opacity-50"
+            >
+              <Save size={14} /> {saving ? "Saving…" : "Save"}
             </button>
-            <button onClick={() => setEditing(false)} className="btn-outline">
+            <button
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              className="btn-outline disabled:opacity-50"
+            >
               Cancel
             </button>
           </>

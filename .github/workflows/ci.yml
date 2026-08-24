@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     name: Rust
@@ -18,6 +22,18 @@ jobs:
           toolchain: 1.90.0
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache embedding models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/biturbo/models
+          key: biturbo-models-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            biturbo-models-${{ runner.os }}-
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -28,16 +44,33 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm typecheck
+
+      - name: Lint frontend
+        run: pnpm lint
+
+      - name: Test frontend
+        run: pnpm test
+
+      - name: Typecheck scripts
+        run: pnpm typecheck:scripts
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm build
 
       - name: Create sidecar placeholder
         run: |
@@ -52,21 +85,56 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+        env:
+  # (#563) Cache embedding models and force CPU EP to keep Ubuntu CI tests stable.
+          BITURBO_EMBED_EP: cpu
 
   mcp-smoke:
     name: MCP smoke test
     runs-on: ubuntu-latest
-    needs: rust
     steps:
       - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache embedding models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/biturbo/models
+          key: biturbo-models-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            biturbo-models-${{ runner.os }}-
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libopenblas-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
       - name: Create sidecar placeholder
         run: |
           mkdir -p src-tauri/binaries
           echo placeholder > src-tauri/binaries/biturbo-mcp-x86_64-unknown-linux-gnu
-      - run: npm run mcp:build
-      - run: npm run mcp:test
+
+      - run: pnpm mcp:build
+      - run: pnpm mcp:test
+        env:
+          BITURBO_EMBED_EP: cpu

@@ -3,8 +3,6 @@ allowBuilds:
   unrs-resolver: true
 packages:
   - "."
-  - "landing"
 onlyBuiltDependencies:
   - esbuild
   - unrs-resolver
-

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use tracing;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -24,6 +25,7 @@ pub struct ExportResult {
 
 pub fn import_folder(state: &AppState, project_id: &str, root: &Path) -> BiResult<ImportResult> {
     let mut result = ImportResult::default();
+    let conn = state.db.conn()?;
 
     let files: Vec<PathBuf> = WalkBuilder::new(root)
         .standard_filters(true)
@@ -48,18 +50,35 @@ pub fn import_folder(state: &AppState, project_id: &str, root: &Path) -> BiResul
         .collect();
 
     for path in &files {
-        let Ok(source) = std::fs::read_to_string(path) else {
-            continue;
-        };
         let rel = path
             .strip_prefix(root)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
+        let Ok(source) = std::fs::read_to_string(path) else {
+            // Surface unreadable/non-UTF-8 files instead of skipping silently (#240).
+            result.errors.push(format!("{rel}: unreadable"));
+            continue;
+        };
+        let abs_path = path.to_string_lossy().to_string();
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("md");
         let chunks = chunk_markdown(&source);
+        let mut file_ok = false;
         for (i, chunk_text) in chunks.into_iter().enumerate() {
             if chunk_text.trim().is_empty() {
+                continue;
+            }
+            // Dedup key: file_path + exact content (#240). Re-importing a
+            // folder must not duplicate every memory nor re-embed them.
+            let exists = conn
+                .query_row(
+                    "SELECT 1 FROM memories WHERE project_id = ?1 AND file_path = ?2 AND content = ?3 LIMIT 1",
+                    rusqlite::params![project_id, &abs_path, chunk_text],
+                    |_| Ok(()),
+                )
+                .is_ok();
+            if exists {
+                file_ok = true;
                 continue;
             }
             let input = crate::memory::RememberInput {
@@ -69,15 +88,21 @@ pub fn import_folder(state: &AppState, project_id: &str, root: &Path) -> BiResul
                 tags: Some(vec!["imported".to_string(), format!("md:{ext}")]),
                 importance: Some(0.5),
                 source_agent: Some("import_folder".to_string()),
-                file_path: Some(path.to_string_lossy().to_string()),
+                file_path: Some(abs_path.clone()),
                 ..Default::default()
             };
             match crate::memory::remember(state, input) {
-                Ok(_) => result.memories_created += 1,
+                Ok(_) => {
+                    result.memories_created += 1;
+                    file_ok = true;
+                }
                 Err(e) => result.errors.push(format!("{rel} chunk {i}: {e}")),
             }
         }
-        result.files_imported += 1;
+        // Count the file only when at least one chunk succeeded (#240).
+        if file_ok {
+            result.files_imported += 1;
+        }
     }
 
     state.db.write(|tx| {
@@ -135,18 +160,42 @@ pub fn export_memories(
     project_id: Option<&str>,
     output_path: &Path,
 ) -> BiResult<ExportResult> {
+    // Confine exports beneath the app data dir (#418, #481): callers must
+    // not be able to create or clobber arbitrary user-writable files.
+    let exports_dir = state.data_dir.join("exports");
+    std::fs::create_dir_all(&exports_dir)
+        .map_err(|e| BiError::Io(format!("create exports dir: {e}")))?;
+    let output_path: PathBuf = if output_path.is_absolute() {
+        if !output_path.starts_with(&exports_dir) {
+            return Err(BiError::Invalid(
+                "output_path must stay within the application exports directory".into(),
+            ));
+        }
+        output_path.to_path_buf()
+    } else {
+        if output_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(BiError::Invalid("output_path must not contain '..'".into()));
+        }
+        exports_dir.join(output_path)
+    };
     let mems = crate::memory::list(state, project_id, None, 1_000_000, 0)?;
-    let json = serde_json::to_string_pretty(&serde_json::json!({
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| BiError::Io(format!("create {}: {e}", parent.display())))?;
+    }
+    let file = std::fs::File::create(&output_path)
+        .map_err(|e| BiError::Io(format!("create {}: {e}", output_path.display())))?;
+    let payload = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "exported_at": chrono::Utc::now().timestamp_millis(),
         "project_id": project_id,
         "memories": mems,
-    }))?;
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(output_path, json)
-        .map_err(|e| BiError::Io(format!("write {}: {e}", output_path.display())))?;
+    });
+    serde_json::to_writer_pretty(file, &payload)
+        .map_err(|e| BiError::Io(format!("serialize export: {e}")))?;
     Ok(ExportResult {
         memories_written: mems.len(),
         output_path: output_path.to_string_lossy().to_string(),
@@ -172,6 +221,7 @@ pub struct WatchStatus {
 struct WatchState {
     running: bool,
     queued: bool,
+    last_ingest: Option<Instant>,
 }
 
 type WatchHandle = Arc<Mutex<Option<notify::RecommendedWatcher>>>;
@@ -189,7 +239,19 @@ pub fn enable_watch(state: &AppState, project_id: &str, root: &Path) -> BiResult
         )?;
         Ok(())
     })?;
-    spawn_watcher(state, project_id, root);
+    if let Err(e) = spawn_watcher(state, project_id, root) {
+        // Roll back the persisted flag so a broken watcher is not treated as
+        // watched forever (#235).
+        let reverted = chrono::Utc::now().timestamp_millis();
+        let _ = state.db.write(|tx| {
+            tx.execute(
+                "UPDATE projects SET watch_enabled = 0, updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![reverted, project_id],
+            )?;
+            Ok(())
+        });
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -215,7 +277,37 @@ pub fn watch_status() -> WatchStatus {
     }
 }
 
-fn spawn_watcher(state: &AppState, project_id: &str, root: &Path) {
+/// Minimum interval between watcher-triggered ingests (#242): during builds or
+/// checkouts events arrive continuously and the old queued-flag ping-pong ran
+/// back-to-back full project ingests.
+const WATCH_INGEST_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Filter raw notify event paths through VCS/ignore rules (#242).
+fn watch_paths_relevant(
+    gitignore: &Option<ignore::gitignore::Gitignore>,
+    root: &Path,
+    paths: &[PathBuf],
+) -> bool {
+    if paths.is_empty() {
+        return true;
+    }
+    paths.iter().any(|p| {
+        if p.components()
+            .any(|c| matches!(c.as_os_str().to_str(), Some(".git") | Some(".jj")))
+        {
+            return false;
+        }
+        if let Some(gi) = gitignore {
+            let rel = p.strip_prefix(root).unwrap_or(p);
+            if matches!(gi.matched(rel, p.is_dir()), ignore::Match::Ignore(_)) {
+                return false;
+            }
+        }
+        true
+    })
+}
+
+fn spawn_watcher(state: &AppState, project_id: &str, root: &Path) -> BiResult<()> {
     let project_id_owned = project_id.to_string();
     let root_owned = root.to_path_buf();
     let state_for_cb: Arc<AppState> = Arc::new(state.clone());
@@ -226,60 +318,96 @@ fn spawn_watcher(state: &AppState, project_id: &str, root: &Path) {
     let root_for_event = root_owned.clone();
     let state_for_event = state_for_cb.clone();
 
+    let mut gitignore_builder = ignore::gitignore::GitignoreBuilder::new(&root_owned);
+    let _ = gitignore_builder.add(root_owned.join(".gitignore"));
+    let _ = gitignore_builder.add(root_owned.join(".biturboignore"));
+    let gitignore = gitignore_builder.build().ok();
+
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                if !matches!(
-                    event.kind,
-                    notify::EventKind::Create(_)
-                        | notify::EventKind::Modify(_)
-                        | notify::EventKind::Remove(_)
-                ) {
-                    return;
-                }
+            let Ok(event) = res else { return };
+            if !matches!(
+                event.kind,
+                notify::EventKind::Create(_)
+                    | notify::EventKind::Modify(_)
+                    | notify::EventKind::Remove(_)
+            ) {
+                return;
+            }
+            if !watch_paths_relevant(&gitignore, &root_for_event, &event.paths) {
+                return;
+            }
 
-                let mut state = job_state_for_cb.lock();
-                if state.running {
-                    state.queued = true;
-                    return;
-                }
-                state.running = true;
-                drop(state);
+            let mut state = job_state_for_cb.lock();
+            if state.running {
+                state.queued = true;
+                return;
+            }
+            if state
+                .last_ingest
+                .is_some_and(|t| t.elapsed() < WATCH_INGEST_COOLDOWN)
+            {
+                state.queued = true;
+                return;
+            }
+            state.running = true;
+            drop(state);
 
-                let state_clone = state_for_event.clone();
-                let pid = pid_for_event.clone();
-                let root = root_for_event.clone();
-                let job_state_for_task = job_state_for_cb.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    let _ = crate::operations::run_watch_ingest_blocking(&state_clone, &pid, &root);
+            let state_clone = state_for_event.clone();
+            let pid = pid_for_event.clone();
+            let root = root_for_event.clone();
+            let job_state_for_task = job_state_for_cb.clone();
+            // Full ingests are heavy (tree-sitter + ONNX): run them on the
+            // blocking pool instead of parking a tokio worker thread (#234).
+            // Detached on purpose; dropping the JoinHandle explicitly keeps
+            // clippy's let_underscore_future quiet about the ignored future.
+            std::mem::drop(tauri::async_runtime::spawn_blocking(move || {
+                std::thread::sleep(Duration::from_secs(2));
+                let started = Instant::now();
+                if let Err(e) =
+                    crate::operations::run_watch_ingest_blocking(&state_clone, &pid, &root)
+                {
+                    tracing::error!("watcher ingest for '{}' failed: {e}", pid);
+                }
+                let mut state = job_state_for_task.lock();
+                state.running = false;
+                state.last_ingest = Some(started);
+                if state.queued {
+                    state.queued = false;
+                    state.running = true;
+                    drop(state);
+                    let elapsed = started.elapsed();
+                    if elapsed < WATCH_INGEST_COOLDOWN {
+                        std::thread::sleep(WATCH_INGEST_COOLDOWN - elapsed);
+                    }
+                    if let Err(e) =
+                        crate::operations::run_watch_ingest_blocking(&state_clone, &pid, &root)
+                    {
+                        tracing::error!("watcher ingest for '{}' failed: {e}", pid);
+                    }
                     let mut state = job_state_for_task.lock();
                     state.running = false;
-                    if state.queued {
-                        state.queued = false;
-                        state.running = true;
-                        drop(state);
-                        let run =
-                            crate::operations::run_watch_ingest_blocking(&state_clone, &pid, &root);
-                        if let Err(e) = &run {
-                            tracing::error!("watcher ingest for '{}' failed: {e}", pid);
-                        }
-                        let mut state = job_state_for_task.lock();
-                        state.running = false;
-                    }
-                });
-            }
+                    state.last_ingest = Some(Instant::now());
+                }
+            }));
         }) {
             Ok(w) => w,
-            Err(_) => return,
+            Err(e) => {
+                return Err(BiError::Io(format!(
+                    "create watcher for '{project_id}': {e}"
+                )));
+            }
         };
 
     use notify::Watcher;
-    let _ = watcher.watch(root, notify::RecursiveMode::Recursive);
+    watcher
+        .watch(root, notify::RecursiveMode::Recursive)
+        .map_err(|e| BiError::Io(format!("watch {}: {e}", root.display())))?;
     WATCHERS.write().insert(
         project_id_owned,
         (Arc::new(Mutex::new(Some(watcher))), job_state),
     );
+    Ok(())
 }
 
 pub fn resume_watches(state: &AppState) {
@@ -298,7 +426,9 @@ pub fn resume_watches(state: &AppState) {
         .unwrap_or_default();
     for (id, root) in rows {
         if !WATCHERS.read().contains_key(&id) {
-            spawn_watcher(state, &id, Path::new(&root));
+            if let Err(e) = spawn_watcher(state, &id, Path::new(&root)) {
+                tracing::error!("failed to resume watcher for '{id}': {e}");
+            }
         }
     }
 }

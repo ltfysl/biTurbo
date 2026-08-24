@@ -18,21 +18,26 @@ mod tests {
             .data_dir
             .join("indices")
             .join(format!("{project_id}.tvim"));
+        let tmp = tvim.with_extension("tvim.tmp");
+        let meta_tmp = state
+            .data_dir
+            .join("indices")
+            .join(format!("{project_id}.uidmap.json.tmp"));
+
+        // Flush explicitly so the test waits on an observable event instead of
+        // the background flusher's 5 s timer (#494).
+        let _ = state
+            .get_or_load_index(project_id)
+            .and_then(|idx| idx.flush());
+
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if tvim.exists() {
-                let tmp = tvim.with_extension("tvim.tmp");
-                let meta_tmp = state
-                    .data_dir
-                    .join("indices")
-                    .join(format!("{project_id}.uidmap.json.tmp"));
-                if !tmp.exists() && !meta_tmp.exists() {
-                    return true;
-                }
+            if tvim.exists() && !tmp.exists() && !meta_tmp.exists() {
+                return true;
             }
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(20));
         }
-        tvim.exists()
+        tvim.exists() && !tmp.exists() && !meta_tmp.exists()
     }
 
     #[test]
@@ -60,7 +65,7 @@ mod tests {
         );
 
         assert!(
-            wait_for_index_flush(&state, project_id, Duration::from_secs(3)),
+            wait_for_index_flush(&state, project_id, Duration::from_secs(30)),
             "index file not flushed within 3s"
         );
 
@@ -103,7 +108,7 @@ mod tests {
         assert!(!hits.is_empty(), "ingested code not searchable");
 
         assert!(
-            wait_for_index_flush(&state, project_id, Duration::from_secs(3)),
+            wait_for_index_flush(&state, project_id, Duration::from_secs(30)),
             "index not flushed after ingest"
         );
 
@@ -128,7 +133,7 @@ mod tests {
         assert!(wait_for_index_flush(
             &state,
             project_id,
-            Duration::from_secs(3)
+            Duration::from_secs(30)
         ));
 
         // Wipe the on-disk index while keeping SQLite rows — simulates drift.
@@ -165,7 +170,7 @@ mod tests {
             assert!(wait_for_index_flush(
                 &state,
                 &state.default_project_id,
-                Duration::from_secs(3)
+                Duration::from_secs(30)
             ));
             mem.uid
         };

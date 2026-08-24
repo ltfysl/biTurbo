@@ -32,7 +32,9 @@ export function Sidebar() {
   const totalMem = useApp((s) => s.stats?.total_memories ?? 0);
   const totalProjects = useApp((s) => s.stats?.total_projects ?? 0);
 
-  const connectedAgents = agents.length;
+  const dayAgo = 24 * 60 * 60 * 1000;
+  const recentAgents = agents.filter((a) => Date.now() - a.last_seen < dayAgo).length;
+  const dotColor = recentAgents > 0 ? "bg-success" : "bg-text-dim";
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border-subtle bg-surface/40">
@@ -89,11 +91,11 @@ export function Sidebar() {
         <div className="flex items-center gap-2 rounded-md bg-surface-2 px-3 py-2">
           <span className="relative flex h-2 w-2">
             {/* Static status dot — infinite CSS pulse keeps WebKit busy under WSLg zoom. */}
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+            <span className={clsx("relative inline-flex h-2 w-2 rounded-full", dotColor)} />
           </span>
           <div className="flex-1 text-xs">
             <div className="font-medium text-text">
-              {connectedAgents} agent{connectedAgents === 1 ? "" : "s"}
+              {recentAgents} agent{recentAgents === 1 ? "" : "s"} today
             </div>
             <div className="text-text-dim">{totalMem.toLocaleString()} memories</div>
           </div>
@@ -127,8 +129,8 @@ function ProjectList() {
 
   async function ingestNow(projectId: string, rootPath: string) {
     try {
-      const job = await api.ingestProject(projectId, rootPath);
-      useApp.getState().registerIngestJob(projectId, job.job_id);
+      const job = await api.startIngest(projectId, rootPath);
+      useApp.getState().registerIngestJob(projectId, job.id);
       showToast({ kind: "ok", text: `Indexing ${projectId}…` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
@@ -149,6 +151,13 @@ function ProjectList() {
     if (!ok) return;
     try {
       await api.deleteProject(id);
+      // Switch away from a deleted project before refreshing so scoped
+      // views and filters never operate on a dead id.
+      if (id === currentProjectId) {
+        const remaining = projects.filter((p) => p.id !== id);
+        const fallback = remaining.find((p) => p.id === "default")?.id ?? remaining[0]?.id ?? "default";
+        setCurrentProjectId(fallback);
+      }
       await Promise.all([refreshProjects(), refreshStats(), refreshGraph().catch(() => {})]);
       showToast({ kind: "ok", text: "Deleted" });
     } catch (e) {

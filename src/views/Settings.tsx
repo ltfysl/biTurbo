@@ -18,7 +18,7 @@ import {
   ArrowUpCircle,
 } from "lucide-react";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import clsx from "clsx";
 
@@ -36,7 +36,7 @@ export function Settings() {
   const [launchOnBoot, setLaunchOnBoot] = useState(false);
   const [bootLoading, setBootLoading] = useState(true);
   const [bootSaving, setBootSaving] = useState(false);
-  const [mcpInstalling, setMcpInstalling] = useState<string | null>(null);
+  const [mcpInstalling, setMcpInstalling] = useState<Set<string>>(new Set());
   const [mcpInstalled, setMcpInstalled] = useState<Set<string>>(new Set());
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; available: boolean } | null>(null);
@@ -187,11 +187,14 @@ ${end}`;
   }
 
   function copy(label: string, text: string) {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(label);
-      showToast({ kind: "ok", text: `Copied ${label}` });
-      setTimeout(() => setCopied(null), 1500);
-    });
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(label);
+        showToast({ kind: "ok", text: `Copied ${label}` });
+        setTimeout(() => setCopied(null), 1500);
+      })
+      .catch(() => showToast({ kind: "err", text: "Clipboard blocked" }));
   }
 
   const mcpTargets = [
@@ -202,8 +205,21 @@ ${end}`;
     { id: "opencode", label: "OpenCode" },
   ] as const;
 
+  useEffect(() => {
+    Promise.all(
+      mcpTargets.map((t) =>
+        api.mcpConfigStatus(t.id)
+          .then((installed) => ({ id: t.id, installed }))
+          .catch(() => ({ id: t.id, installed: false })),
+      ),
+    ).then((results) => {
+      const installed = new Set(results.filter((r) => r.installed).map((r) => r.id));
+      setMcpInstalled(installed);
+    });
+  }, []);
+
   async function installMcp(target: string, label: string) {
-    setMcpInstalling(target);
+    setMcpInstalling((s) => new Set(s).add(target));
     try {
       const res = await api.installMcpConfig(target);
       showToast({
@@ -214,7 +230,11 @@ ${end}`;
     } catch (e) {
       showToast({ kind: "err", text: `Failed to install ${label}: ${e}` });
     } finally {
-      setMcpInstalling(null);
+      setMcpInstalling((s) => {
+        const n = new Set(s);
+        n.delete(target);
+        return n;
+      });
     }
   }
 
@@ -265,12 +285,23 @@ ${end}`;
               {resolvedDataDir}
             </span>
             <button
-              onClick={() => {
-                shellOpen(resolvedDataDir).catch((e) => {
-                  showToast({ kind: "err", text: `Could not open folder: ${String(e)}` });
-                });
+              onClick={async () => {
+                try {
+                  await openPath(resolvedDataDir);
+                } catch (e) {
+                  const msg = String(e);
+                  if (msg.includes("Not allowed") || msg.includes("forbidden") || msg.includes("Forbidden")) {
+                    try {
+                      await invoke("open_file", { path: resolvedDataDir });
+                      return;
+                    } catch (e2) {
+                      showToast({ kind: "err", text: `Could not open folder: ${String(e2)}` });
+                      return;
+                    }
+                  }
+                  showToast({ kind: "err", text: `Could not open folder: ${msg}` });
+                }
               }}
-              className="btn-outline shrink-0 px-2 py-0.5 text-[11px]"
             >
               Open folder
             </button>
@@ -396,13 +427,13 @@ ${end}`;
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {mcpTargets.map((t) => {
-              const installing = mcpInstalling === t.id;
+              const installing = mcpInstalling.has(t.id);
               const installed = mcpInstalled.has(t.id);
               return (
                 <button
                   key={t.id}
                   onClick={() => installMcp(t.id, t.label)}
-                  disabled={installing}
+                  disabled={mcpInstalling.size > 0}
                   className={clsx(
                     "btn-outline inline-flex items-center gap-1.5 text-xs",
                     installed && "border-accent/50 bg-accent-soft",
@@ -423,7 +454,7 @@ ${end}`;
         </div>
 
         <p className="mt-3 text-sm text-text-muted">
-          Once connected, your agent has 20 tools (search, remember, forget, ingest_project,
+          Once connected, your agent has 27 tools (search, remember, forget, ingest_project,
           consolidate, list_projects, …). See <span className="kbd">INSTRUCTIONS.md</span> in the
           project root for the full tool reference and usage rules.
         </p>

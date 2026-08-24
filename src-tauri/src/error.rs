@@ -12,8 +12,12 @@ pub enum BiError {
     #[error("invalid input: {0}")]
     Invalid(String),
 
-    #[error("database error: {0}")]
-    Db(String),
+    #[error("database error: {message}")]
+    Db {
+        message: String,
+        code: Option<String>,
+        extended: Option<i32>,
+    },
 
     #[error("index error: {0}")]
     Index(String),
@@ -33,12 +37,24 @@ pub enum BiError {
 
 impl From<rusqlite::Error> for BiError {
     fn from(e: rusqlite::Error) -> Self {
-        BiError::Db(e.to_string())
+        let (code, extended) = e
+            .sqlite_error()
+            .map(|se| (Some(format!("{:?}", se.code)), Some(se.extended_code)))
+            .unwrap_or((None, None));
+        BiError::Db {
+            message: e.to_string(),
+            code,
+            extended,
+        }
     }
 }
 impl From<r2d2::Error> for BiError {
     fn from(e: r2d2::Error) -> Self {
-        BiError::Db(e.to_string())
+        BiError::Db {
+            message: e.to_string(),
+            code: None,
+            extended: None,
+        }
     }
 }
 impl From<serde_json::Error> for BiError {

@@ -59,6 +59,14 @@ pub struct CreateProjectInput {
 pub fn create(state: &AppState, input: CreateProjectInput) -> BiResult<Project> {
     let id = input.id.unwrap_or_else(|| slugify(&input.name));
     validate_project_id(&id)?;
+    validate_project_name(&input.name)?;
+    if let Some(ref root_path) = input.root_path {
+        if !std::path::Path::new(root_path).is_dir() {
+            return Err(BiError::Invalid(format!(
+                "root_path '{root_path}' does not exist or is not a directory"
+            )));
+        }
+    }
     let bit_width = input.bit_width.unwrap_or(4);
     if !(2..=4).contains(&bit_width) {
         return Err(BiError::Invalid(format!(
@@ -92,7 +100,7 @@ pub fn create(state: &AppState, input: CreateProjectInput) -> BiResult<Project> 
         let biturbo_file = std::path::PathBuf::from(root_path).join(".biTurbo");
         // Only write if file doesn't exist (skip/continue if it exists)
         if !biturbo_file.exists() {
-            let _ = std::fs::write(&biturbo_file, biturbo_file_content(&id, &input.name, now));
+            std::fs::write(&biturbo_file, biturbo_file_content(&id, &input.name, now))?;
         }
     }
 
@@ -172,8 +180,10 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
                 .join("indices")
                 .join(format!("{id}.mutation.lock")),
         )?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+    fs4::fs_std::FileExt::lock_exclusive(&lock)?;
     state.flush_all_indices();
+    crate::io::disable_watch(state, id)?;
+
     state.indices.write().remove(id);
     // Remove derived state first. If the process stops here, SQLite still
     // contains the project and startup repair deterministically rebuilds it.
@@ -188,6 +198,10 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
     }
     let deleted = state.db.write(|tx| {
         tx.execute(
+            "DELETE FROM recall_feedback WHERE memory_uid IN (SELECT uid FROM memories WHERE project_id = ?1)",
+            rusqlite::params![id],
+        )?;
+        tx.execute(
             "DELETE FROM memories WHERE project_id = ?1",
             rusqlite::params![id],
         )?;
@@ -195,7 +209,7 @@ pub fn delete(state: &AppState, id: &str) -> BiResult<()> {
         log_activity(tx, Some(id), None, "delete_project", None, None)?;
         Ok(())
     });
-    fs2::FileExt::unlock(&lock)?;
+    fs4::fs_std::FileExt::unlock(&lock)?;
     if deleted.is_err() {
         let _ = state.repair_index_if_needed(id);
     }
@@ -227,6 +241,9 @@ pub fn resolve_project_id(
     root_path: Option<&str>,
 ) -> BiResult<String> {
     if let Some(pid) = project_id.filter(|s| !s.is_empty()) {
+        // Verify the explicit id exists before use; otherwise a typo'd id
+        // silently falls through to an empty result set (#478).
+        get(state, pid)?;
         return Ok(pid.to_string());
     }
     if let Some(root) = root_path.filter(|s| !s.is_empty()) {
@@ -236,23 +253,30 @@ pub fn resolve_project_id(
                 for line in content.lines() {
                     if let Some(name) = line.strip_prefix("projectName=") {
                         let name = name.trim();
-                        if name.is_empty() {
-                            continue;
-                        }
                         let slug = slugify(name);
+                        // Prefer an exact id match; on multiple name matches
+                        // fail with the candidate list so recall rooted at a
+                        // directory cannot attach to the wrong project (#479).
                         if get(state, &slug).is_ok() {
                             return Ok(slug);
                         }
                         let conn = state.db.conn()?;
-                        let found: Option<String> = conn
-                            .query_row(
-                                "SELECT id FROM projects WHERE name = ?1 OR id = ?1 LIMIT 1",
-                                rusqlite::params![name],
-                                |r| r.get(0),
-                            )
-                            .optional()?;
-                        if let Some(id) = found {
-                            return Ok(id);
+                        let ids: Vec<String> = {
+                            let mut stmt = conn
+                                .prepare("SELECT id FROM projects WHERE name = ?1 ORDER BY id")?;
+                            let rows =
+                                stmt.query_map(rusqlite::params![name], |r| r.get::<_, String>(0))?;
+                            rows.filter_map(Result::ok).collect()
+                        };
+                        match ids.len() {
+                            0 => {}
+                            1 => return Ok(ids.into_iter().next().unwrap()),
+                            _ => {
+                                return Err(BiError::Invalid(format!(
+                                    "project name '{name}' is ambiguous; candidates: {}",
+                                    ids.join(", ")
+                                )))
+                            }
                         }
                     }
                 }
@@ -311,6 +335,22 @@ pub fn validate_project_id(id: &str) -> BiResult<()> {
     }
 }
 
+/// Reject control characters and newlines in project names before they are
+/// interpolated into line-oriented `.biTurbo` marker files.
+pub fn validate_project_name(name: &str) -> BiResult<()> {
+    if name.is_empty() || name.len() > 128 {
+        return Err(BiError::Invalid(
+            "project name must be 1-128 characters".into(),
+        ));
+    }
+    if name.chars().any(|c| c.is_ascii_control()) {
+        return Err(BiError::Invalid(
+            "project name cannot contain control characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +387,15 @@ mod tests {
         assert!(validate_project_id(&ok).is_ok());
         let too_long = "a".repeat(65);
         assert!(validate_project_id(&too_long).is_err());
+    }
+
+    #[test]
+    fn project_names_with_control_chars_are_rejected() {
+        for bad in ["line1\nline2", "tab\there", "bell\x07"] {
+            assert!(validate_project_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_project_name("ok name").is_ok());
+        assert!(validate_project_name(&"a".repeat(128)).is_ok());
+        assert!(validate_project_name(&"a".repeat(129)).is_err());
     }
 }

@@ -11,7 +11,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 type RpcId = number;
 interface RpcRequest {

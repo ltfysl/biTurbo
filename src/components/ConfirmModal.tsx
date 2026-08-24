@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import clsx from "clsx";
 import { useApp } from "../lib/store";
@@ -45,8 +45,32 @@ function ConfirmModal({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
-  const [pending, setPending] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const tone = opts.tone ?? "danger";
+
+  // Keep Tab cycling within the modal.
+  function trapTab(e: React.KeyboardEvent) {
+    if (e.key !== "Tab" || !dialogRef.current) return;
+    const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    const inside = active != null && dialogRef.current.contains(active);
+    if (e.shiftKey) {
+      if (active === first || !inside) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (active === last || !inside) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
 
   // Focus the safe action on open (Cancel for destructive confirms so a
   // reflexive Enter can't trigger an irreversible action), restore focus
@@ -76,28 +100,19 @@ function ConfirmModal({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onCancel]);
 
-  async function handleConfirm() {
-    setPending(true);
-    try {
-      onResolve();
-    } finally {
-      // The store removes the modal synchronously when onResolve is
-      // called, so by the time this runs the component is unmounted
-      // anyway. Guard anyway.
-      setPending(false);
-    }
-  }
-
   const confirmLabel = opts.confirmLabel ?? "Delete";
   const cancelLabel = opts.cancelLabel ?? "Cancel";
 
+
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 animate-backdrop_in backdrop-blur-sm"
       onMouseDown={(e) => {
         // Backdrop click cancels.
         if (e.target === e.currentTarget) onCancel();
       }}
+      onKeyDown={trapTab}
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-title"
@@ -132,15 +147,14 @@ function ConfirmModal({
           <button
             ref={cancelRef}
             onClick={onCancel}
-            disabled={pending}
             className="btn-outline"
           >
             {cancelLabel}
           </button>
+// (#521) No "Working…" pending state; the resolver is called synchronously.
           <button
             ref={confirmRef}
-            onClick={handleConfirm}
-            disabled={pending}
+            onClick={onResolve}
             className={clsx(
               "btn",
               tone === "danger"
@@ -148,17 +162,7 @@ function ConfirmModal({
                 : "btn-primary"
             )}
           >
-            {pending ? (
-              <span className="flex items-center gap-2">
-                <span
-                  className="h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"
-                  aria-hidden
-                />
-                <span>Working…</span>
-              </span>
-            ) : (
-              confirmLabel
-            )}
+            {confirmLabel}
           </button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useApp } from "../lib/store";
 import clsx from "clsx";
 
@@ -40,24 +40,38 @@ function ContextMenu({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
+  const [visible, setVisible] = useState(false);
   const [activeIdx, setActiveIdx] = useState<number>(() => {
     // Focus first non-disabled, non-separator item.
     return items.findIndex((i) => !i.disabled && !i.separator);
   });
 
-  // Viewport edge clamping.
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const w = el.offsetWidth || MENU_WIDTH_ESTIMATE;
-    const h = el.offsetHeight || MENU_HEIGHT_ESTIMATE;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    let left = x;
-    let top = y;
-    if (left + w > vw - 8) left = Math.max(8, vw - w - 8);
-    if (top + h > vh - 8) top = Math.max(8, vh - h - 8);
-    setPos({ left, top });
+  // Clamp to the viewport. Runs as a layout effect so the first paint is
+  // already clamped (no one-frame flash at the raw cursor coords), and
+  // re-runs on resize/scroll so the menu can't strand off-screen.
+// (#520) Position hidden, measure, then show; re-clamp on resize/scroll.
+  useLayoutEffect(() => {
+    const clamp = () => {
+      const el = ref.current;
+      if (!el) return;
+      const w = el.offsetWidth || MENU_WIDTH_ESTIMATE;
+      const h = el.offsetHeight || MENU_HEIGHT_ESTIMATE;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      let left = x;
+      let top = y;
+      if (left + w > vw - 8) left = Math.max(8, vw - w - 8);
+      if (top + h > vh - 8) top = Math.max(8, vh - h - 8);
+      setPos({ left, top });
+      setVisible(true);
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    window.addEventListener("scroll", clamp, true);
+    return () => {
+      window.removeEventListener("resize", clamp);
+      window.removeEventListener("scroll", clamp, true);
+    };
   }, [x, y, items]);
 
   // Outside click + Escape close.
@@ -121,9 +135,8 @@ function ContextMenu({
 
   return (
     <div
-      ref={ref}
+      style={{ left: pos.left, top: pos.top, visibility: visible ? "visible" : "hidden" }}
       role="menu"
-      style={{ left: pos.left, top: pos.top }}
       className="fixed z-50 min-w-[180px] rounded-md border border-border bg-surface p-1 shadow-modal animate-context_in"
       onContextMenu={(e) => e.preventDefault()}
     >

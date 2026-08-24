@@ -84,7 +84,21 @@ export function truncatePath(path: string, maxLen = 40): string {
     if (("…/" + next).length > maxLen) break;
     result = next;
   }
-  return result === path ? result : "…/" + result;
+  if (result === path) return result;
+  const out = "…/" + result;
+  if (out.length <= maxLen) return out;
+  // The remaining result (often the filename alone) is still too long.
+  // Truncate the final segment while preserving an extension if present.
+  const lastSlash = result.lastIndexOf("/");
+  const prefix = lastSlash === -1 ? "" : result.slice(0, lastSlash + 1);
+  const name = lastSlash === -1 ? result : result.slice(lastSlash + 1);
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  const budget = maxLen - 3 - prefix.length - ext.length; // 3 for leading "…/"
+  if (budget > 2) {
+    return "…/" + prefix + stem.slice(0, budget - 1) + "…" + ext;
+  }
+  return "…/" + (prefix + (ext ? "…" + ext : "…")).slice(0, maxLen - 3);
 }
 
 export function importanceDots(imp: number): number {
@@ -156,7 +170,7 @@ export interface CodeToken {
 export function tokenizeCode(line: string): CodeToken[] {
   const tokens: CodeToken[] = [];
   const pattern =
-    /(\/\/.*$|#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)|(\s+)|(.)/g;
+    /(\/\/.*$|^\s*#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)|(\s+)|(.)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(line))) {
     const [, comment, str, num, word, space, other] = match;

@@ -26,16 +26,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
 
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
 async-trait = "0.1"
 
 # Storage
@@ -43,7 +40,7 @@ rusqlite = { version = "0.31", features = ["bundled", "chrono", "backup"] }
 parking_lot = "0.12"
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
-fs2 = "0.4"
+fs4 = "0.13"
 
 # Vector index
 turbovec = "0.8"

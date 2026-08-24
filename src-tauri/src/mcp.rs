@@ -5,19 +5,21 @@ use crate::project::{self, CreateProjectInput};
 use crate::state::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
 pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
-    let data_dir = dirs::data_dir()
-        .ok_or_else(|| anyhow::anyhow!("no data dir"))?
-        .join("com.biturbo.app");
-    std::fs::create_dir_all(&data_dir).ok();
+    let data_dir = std::env::var_os("BITURBO_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::data_dir().map(|d| d.join(crate::APP_DIR_NAME)))
+        .ok_or_else(|| anyhow::anyhow!("no data dir"))?;
     let state = Arc::new(AppState::open(&data_dir)?);
-    crate::operations::resume_pending(state.clone())?;
-
+    // The standalone MCP binary has no GUI lifecycle to spawn the scheduler,
+    // so start it here; otherwise consolidate/consolidate_status are unusable
+    // and enqueue returns a "worker not started" error (#475).
+    crate::scheduler::spawn(state.clone());
     let stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
+    let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
 
@@ -31,18 +33,65 @@ pub async fn run_mcp_server_stdio() -> anyhow::Result<()> {
         if trimmed.is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<JsonRpcRequest>(trimmed) {
-            Ok(req) => dispatch(&state, req).await,
-            Err(e) => json!({
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": { "code": -32700, "message": format!("parse error: {e}") }
+                });
+                let out = serde_json::to_string(&response).unwrap_or_default();
+                let mut guard = stdout.lock().await;
+                guard.write_all(out.as_bytes()).await?;
+                guard.write_all(b"\n").await?;
+                guard.flush().await?;
+                continue;
+            }
+        };
+        if value.is_array() {
+            // MCP allows batch requests, but this server handles them one at a
+            // time. Reject with a single Invalid Request instead of a parse
+            // error so clients get a clean -32600 (#492).
+            let response = json!({
                 "jsonrpc": "2.0",
                 "id": Value::Null,
-                "error": { "code": -32700, "message": format!("parse error: {e}") }
-            }),
-        };
-        let out = serde_json::to_string(&response).unwrap_or_default();
-        stdout.write_all(out.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
+                "error": { "code": -32600, "message": "batch requests are not supported" }
+            });
+            let out = serde_json::to_string(&response).unwrap_or_default();
+            let mut guard = stdout.lock().await;
+            guard.write_all(out.as_bytes()).await?;
+            guard.write_all(b"\n").await?;
+            guard.flush().await?;
+            continue;
+        }
+        match serde_json::from_value::<JsonRpcRequest>(value) {
+            Ok(req) => {
+                let state = state.clone();
+                let stdout = stdout.clone();
+                tokio::spawn(async move {
+                    if let Some(response) = dispatch(state, req).await {
+                        let out = serde_json::to_string(&response).unwrap_or_default();
+                        let mut guard = stdout.lock().await;
+                        let _ = guard.write_all(out.as_bytes()).await;
+                        let _ = guard.write_all(b"\n").await;
+                        let _ = guard.flush().await;
+                    }
+                });
+            }
+            Err(e) => {
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": { "code": -32700, "message": format!("parse error: {e}") }
+                });
+                let out = serde_json::to_string(&response).unwrap_or_default();
+                let mut guard = stdout.lock().await;
+                guard.write_all(out.as_bytes()).await?;
+                guard.write_all(b"\n").await?;
+                guard.flush().await?;
+            }
+        }
     }
     Ok(())
 }
@@ -57,45 +106,42 @@ struct JsonRpcRequest {
     params: Value,
 }
 
-async fn dispatch(state: &Arc<AppState>, req: JsonRpcRequest) -> Value {
-    let id = req.id.clone().unwrap_or(Value::Null);
+async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
+    let id = req.id.as_ref()?;
     match req.method.as_str() {
-        "initialize" => {
-            let mut response = ok(
-                &id,
-                json!({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": "## biTurbo Memory Layer — Instructions\n\nYou have access to biTurbo, a persistent semantic memory layer via MCP.\n\n## Core loop:\n1. **RECALL** — call `recall_for_context(query=<user msg>, project_id=<current>, k=8)`.\n2. **ANSWER** — respond using recalled context.\n3. **REMEMBER** — store only durable, useful information.\n\n## When to `remember`:\n- ✅ User states a fact about themselves/environment/project → `fact`\n- ✅ You make a decision with rationale → `decision`\n- ✅ User expresses a preference (style, verbosity, tools) → `preference`\n- ✅ User corrects you → `fact` with `supersedes`\n- ✅ You discover a codebase pattern → `pattern`\n- ✅ Something noteworthy happened → `episode`\n- ✅ Meta-observation about user or work → `reflection`\n- ❌ Transient state — don't remember\n- ❌ Public knowledge any LLM knows — don't remember\n- ❌ Secrets, tokens, PII — **NEVER**\n\nIf unsure: \"Would future-me in 6 months want to know this?\" If yes, remember.\n\n## Memory types:\n- `fact` — verifiable facts\n- `decision` — choices + why\n- `preference` — how user wants things\n- `pattern` — repeatable approaches\n- `episode` — past events (include timestamp)\n- `reflection` — meta-observations\n- `code` — set by ingest_project only\n\n## Importance (0-1):\n- 0.8-1.0: cross-project rules, key decisions\n- 0.5-0.7: typical (default 0.6)\n- 0.2-0.4: specific/stale details\n\n## Tags: 1-3 per memory. Good: `auth`, `ui`, `db`, `convention`, `api`. Bad: `important`, `todo`.\n\n## Session lifecycle:\n- START → `register_agent(name, kind)`, `list_projects()`\n- EVERY TURN → recall before non-trivial work\n- END → `consolidate(project_id)`, final `remember`\n\n## Multi-project:\n- Always pass `project_id`. Isolated per project.\n- `project_id=\"default\"` for cross-cutting facts.\n\n## Anti-patterns:\n- Don't dump 10k memories — use recall_for_context k=5-10\n- Don't skip recall for project-specific work — amnesia is worse than no tool\n- Don't remember the obvious (Cargo, Git, syntax)\n- Don't remember every response — memory quality matters more than volume\n- Don't forget prematurely — knowledge dies\n- Never cross-project leak — right project_id always\n- Never store secrets, tokens, PII\n\n## Tools (20):\nremember, forget, update, get_memory, search, list, list_tags,\nrecall_for_context, list_projects, get_project, create_project,\ndelete_project, ingest_project, consolidate, consolidate_status,\nget_project_name_from_file,\nstats, bootstrap, recent_activity, register_agent"
-                }),
-            );
-            response["result"]["instructions"] = Value::String(MCP_INSTRUCTIONS.into());
-            response
-        }
-        "notifications/initialized" => json!({}),
-        "tools/list" => ok(&id, json!({ "tools": tool_schemas() })),
+        "initialize" => Some(ok(
+            id,
+            // Built the initialize result from the canonical MCP_INSTRUCTIONS only;
+            // an earlier inline copy was removed to avoid drift (#482).
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": MCP_INSTRUCTIONS,
+            }),
+        )),
+        "tools/list" => Some(ok(id, json!({ "tools": tool_schemas() }))),
         "tools/call" => {
             let params = req.params;
             let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            match call_tool(state, name, args).await {
-                Ok(content) => ok(&id, json!({ "content": content, "isError": false })),
-                Err(e) => ok(
-                    &id,
+            match call_tool(&state, name, args).await {
+                Ok(content) => Some(ok(id, json!({ "content": content, "isError": false }))),
+                Err(e) => Some(ok(
+                    id,
                     json!({
                         "content": [{ "type": "text", "text": format!("error: {e}") }],
                         "isError": true
                     }),
-                ),
+                )),
             }
         }
-        "ping" => ok(&id, json!({})),
-        _ => json!({
+        "ping" => Some(ok(id, json!({}))),
+        _ => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": { "code": -32601, "message": format!("method not found: {}", req.method) }
-        }),
+        })),
     }
 }
 
@@ -163,7 +209,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
         "list" => {
             let project_id = args.get("project_id").and_then(|v| v.as_str());
             let mem_type = args.get("mem_type").and_then(|v| v.as_str());
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.clamp(1, 500))
+                .unwrap_or(50) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let m: Vec<Memory> = memory::list(state, project_id, mem_type, limit, offset)?;
             text(&serde_json::to_string_pretty(&m)?)
@@ -192,12 +242,23 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
         "submit_recall_feedback" => {
             let recall_id = arg_str(&args, "recall_id")?;
             let memory_uid = arg_str(&args, "memory_uid")?;
-            let value = args.get("value").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
-            let source = args
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("explicit");
-            crate::recall::submit_feedback(state, &recall_id, &memory_uid, value, source)?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| BiError::Invalid("missing value arg".into()))?;
+            if !matches!(value, -1 | 1) {
+                return Err(BiError::Invalid(format!(
+                    "value must be -1 or 1, got {value}"
+                )));
+            }
+            let value = value as i8;
+            let source = arg_str(&args, "source").unwrap_or_else(|_| "explicit".into());
+            if !matches!(source.as_str(), "explicit" | "implicit") {
+                return Err(BiError::Invalid(format!(
+                    "source must be explicit or implicit, got {source}"
+                )));
+            }
+            crate::recall::submit_feedback(state, &recall_id, &memory_uid, value, &source)?;
             text("{\"recorded\":true}")
         }
         "list_projects" => text(&serde_json::to_string_pretty(&project::list(state)?)?),
@@ -217,10 +278,20 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
                 root_path: args
                     .get("root_path")
                     .and_then(|v| v.as_str().map(String::from)),
-                bit_width: args
-                    .get("bit_width")
-                    .and_then(|v| v.as_u64())
-                    .map(|n| n as u8),
+                bit_width: {
+                    let value = args.get("bit_width").and_then(|v| v.as_u64());
+                    match value {
+                        Some(n) => Some(match u8::try_from(n) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                return Err(BiError::Invalid(format!(
+                                    "bit_width {n} is out of u8 range"
+                                )))
+                            }
+                        }),
+                        None => None,
+                    }
+                },
             };
             let p = project::create(state, input)?;
             text(&serde_json::to_string_pretty(&p)?)
@@ -310,8 +381,36 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
                 require_project(p)?;
             }
             let output_path = arg_str(&args, "output_path")?;
-            let r =
-                crate::io::export_memories(state, project_id, std::path::Path::new(&output_path))?;
+            if output_path.is_empty() {
+                return Err(BiError::Invalid("output_path cannot be empty".into()));
+            }
+            let overwrite = args
+                .get("overwrite")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let exports_dir = state.data_dir.join("exports");
+            if std::path::Path::new(&output_path).is_absolute() {
+                return Err(BiError::Invalid(
+                    "output_path must be a relative path".into(),
+                ));
+            }
+            if std::path::Path::new(&output_path)
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(BiError::Invalid(
+                    "output_path must not contain '..' or special components".into(),
+                ));
+            }
+            let candidate = exports_dir.join(&output_path);
+            std::fs::create_dir_all(&exports_dir).ok();
+            if candidate.exists() && !overwrite {
+                return Err(BiError::Invalid(format!(
+                    "file already exists: {} (set overwrite=true to replace)",
+                    candidate.display()
+                )));
+            }
+            let r = crate::io::export_memories(state, project_id, &candidate)?;
             text(&serde_json::to_string_pretty(&r)?)
         }
         "enable_watch" => {
@@ -501,7 +600,7 @@ fn format_context_block(hits: &[MemoryWithScore]) -> String {
     // Deduplicate near-identical memories before formatting
     let deduped = deduplicate_hits(hits, 0.55);
 
-    let mut s = String::from("<ctx>\n");
+    let mut s = String::from("<biTurboContext>\n");
     for (i, h) in deduped.iter().enumerate() {
         let tc = type_code(&h.memory.mem_type);
         let tags = h.memory.tags.join(",");
@@ -533,12 +632,14 @@ fn format_context_block(hits: &[MemoryWithScore]) -> String {
             break;
         }
     }
-    s.push_str("</ctx>");
+    s.push_str("</biTurboContext>");
     s
 }
 
 fn tool_schemas() -> Value {
-    serde_json::from_str(SCHEMAS_JSON).unwrap_or_else(|_| json!([]))
+    // A parse failure here is a build bug; fail loudly instead of silently
+    // serving an empty tool list to every client (#493).
+    serde_json::from_str(SCHEMAS_JSON).expect("MCP tool schemas must be valid JSON")
 }
 
 const SCHEMAS_JSON: &str = r#"[
@@ -548,7 +649,7 @@ const SCHEMAS_JSON: &str = r#"[
 {"name":"get_memory","description":"Fetch one memory by uid.","inputSchema":{"type":"object","required":["uid"],"properties":{"uid":{"type":"string"}}}},
 {"name":"search","description":"Semantic search. Pass project_id or root_path (reads .biTurbo). mem_type filters. k=top-N (default 10).","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"list","description":"List memories with optional filters. Newest first. Default 50.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"},"mem_type":{"type":"string"},"limit":{"type":"number"},"offset":{"type":"number"}}}},
-{"name":"list_tags","description":"List tags for a project with usage counts. Newest first.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"}},"required":["project_id"]}},
+{"name":"list_tags","description":"Map tags to usage counts, sorted descending by count.","inputSchema":{"type":"object","properties":{"project_id":{"type":"string"}}}},
 {"name":"recall_for_context","description":"Build a <biTurboContext> block of top-k relevant memories. Pass project_id or root_path (reads .biTurbo).","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"recall_explain","description":"Recall ranked memories with source ranks, matched terms, feedback boost, and a recall id.","inputSchema":{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"project_id":{"type":"string"},"root_path":{"type":"string"},"mem_type":{"type":"string"},"k":{"type":"number"}}}},
 {"name":"submit_recall_feedback","description":"Record useful or not-useful feedback for one recalled memory.","inputSchema":{"type":"object","required":["recall_id","memory_uid","value"],"properties":{"recall_id":{"type":"string"},"memory_uid":{"type":"string"},"value":{"type":"number"},"source":{"type":"string"}}}},
@@ -570,3 +671,69 @@ const SCHEMAS_JSON: &str = r#"[
 {"name":"register_agent","description":"Register or update this agent's record. Call once per session.","inputSchema":{"type":"object","required":["name","kind"],"properties":{"name":{"type":"string"},"kind":{"type":"string"},"meta":{"type":"object"}}}},
 {"name":"get_project_name_from_file","description":"Read projectName from .biTurbo file in project root. Returns {\"projectName\": \"...\"} or {\"error\": \"...\"}.","inputSchema":{"type":"object","required":["root_path"],"properties":{"root_path":{"type":"string"}}}}
 ]"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_context_block_wraps_hits_in_biturbo_context_tag() {
+        let hit = MemoryWithScore {
+            memory: Memory {
+                uid: "uid".into(),
+                project_id: "p".into(),
+                mem_type: "fact".into(),
+                content: "content".into(),
+                tags: vec!["t".into()],
+                source_agent: None,
+                importance: 0.5,
+                supersedes: None,
+                superseded_by: None,
+                created_at: 0,
+                updated_at: 0,
+                last_access: 0,
+                access_count: 0,
+                file_path: None,
+                start_line: None,
+                end_line: None,
+                language: None,
+            },
+            score: 1.0,
+        };
+        let out = format_context_block(&[hit]);
+        assert!(
+            out.starts_with("<biTurboContext>"),
+            "unexpected opening tag: {out}"
+        );
+        assert!(
+            out.ends_with("</biTurboContext>"),
+            "unexpected closing tag: {out}"
+        );
+    }
+
+    #[test]
+    fn list_tags_schema_has_optional_project_id() {
+        assert!(SCHEMAS_JSON.contains("\"list_tags\""));
+        assert!(
+            SCHEMAS_JSON.contains("Map tags to usage counts, sorted descending by count."),
+            "list_tags description should match actual sorting"
+        );
+        assert!(
+            !SCHEMAS_JSON.contains("List tags for a project with usage counts. Newest first."),
+            "old list_tags description should be gone"
+        );
+    }
+
+    #[test]
+    fn tool_schemas_parses_and_advertises_tools() {
+        let schemas = tool_schemas();
+        let arr = schemas
+            .as_array()
+            .expect("tool_schemas must return an array");
+        assert!(!arr.is_empty(), "MCP must advertise at least one tool");
+        assert!(
+            arr.iter().all(|t| t.get("name").is_some()),
+            "every advertised tool must have a name"
+        );
+    }
+}

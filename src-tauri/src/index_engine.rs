@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tracing;
 use turbovec::IdMapIndex;
@@ -16,6 +16,7 @@ struct Inner {
     uid_to_extid: HashMap<String, u64>,
     extid_to_uid: HashMap<u64, String>,
     next_extid: u64,
+    uid_set_digest: String,
 }
 
 pub struct ProjectIndex {
@@ -24,7 +25,7 @@ pub struct ProjectIndex {
     pub bit_width: usize,
     inner: Mutex<Inner>,
     file_path: PathBuf,
-    dirty: AtomicBool,
+    dirty: AtomicU64,
     last_change: Mutex<Instant>,
 }
 
@@ -68,18 +69,21 @@ impl ProjectIndex {
             (idx, HashMap::new(), HashMap::new(), 1)
         };
 
+        let mut inner = Inner {
+            index,
+            uid_to_extid,
+            extid_to_uid,
+            next_extid,
+            uid_set_digest: String::new(),
+        };
+        inner.recompute_digest();
         Ok(Self {
             project_id: project_id.to_string(),
             dim,
             bit_width,
-            inner: Mutex::new(Inner {
-                index,
-                uid_to_extid,
-                extid_to_uid,
-                next_extid,
-            }),
+            inner: Mutex::new(inner),
             file_path,
-            dirty: AtomicBool::new(false),
+            dirty: AtomicU64::new(0),
             last_change: Mutex::new(Instant::now()),
         })
     }
@@ -94,6 +98,7 @@ impl ProjectIndex {
         }
         let mut inner = self.inner.lock();
         inner.add_one(uid, vector)?;
+        inner.recompute_digest();
         drop(inner);
         self.mark_dirty();
         Ok(())
@@ -116,6 +121,7 @@ impl ProjectIndex {
         let mut inner = self.inner.lock();
         let mut flat: Vec<f32> = Vec::with_capacity(items.len() * self.dim);
         let mut ids: Vec<u64> = Vec::with_capacity(items.len());
+        let mut pairs: Vec<(String, u64)> = Vec::with_capacity(items.len());
         let mut seen: HashSet<&str> = HashSet::new();
         for (uid, vector) in items {
             if !seen.insert(uid) {
@@ -130,7 +136,6 @@ impl ProjectIndex {
             let extid = match inner.uid_to_extid.get(uid) {
                 Some(&id) => {
                     let _ = inner.index.remove(id);
-                    inner.extid_to_uid.remove(&id);
                     id
                 }
                 None => {
@@ -139,15 +144,21 @@ impl ProjectIndex {
                     id
                 }
             };
-            inner.uid_to_extid.insert(uid.clone(), extid);
-            inner.extid_to_uid.insert(extid, uid.clone());
             ids.push(extid);
             flat.extend_from_slice(vector);
+            pairs.push((uid.clone(), extid));
         }
         inner
             .index
             .add_with_ids(&flat, &ids)
             .map_err(|e| BiError::Index(format!("add_batch: {e}")))?;
+        // Apply the map deltas only after the vectors are committed so a
+        // failed add never leaves phantom mappings behind (#458).
+        for (uid, extid) in pairs {
+            inner.uid_to_extid.insert(uid.clone(), extid);
+            inner.extid_to_uid.insert(extid, uid);
+        }
+        inner.recompute_digest();
         drop(inner);
         self.mark_dirty();
         Ok(())
@@ -158,6 +169,7 @@ impl ProjectIndex {
         if let Some(extid) = inner.uid_to_extid.remove(uid) {
             inner.extid_to_uid.remove(&extid);
             let removed = inner.index.remove(extid);
+            inner.recompute_digest();
             drop(inner);
             self.mark_dirty();
             Ok(removed)
@@ -167,7 +179,7 @@ impl ProjectIndex {
     }
 
     fn mark_dirty(&self) {
-        self.dirty.store(true, Ordering::Release);
+        self.dirty.fetch_add(1, Ordering::SeqCst);
         *self.last_change.lock() = Instant::now();
     }
 
@@ -175,7 +187,7 @@ impl ProjectIndex {
     /// the last change was more than `min_idle` ago, or if `force` is true.
     /// Returns true if a write actually happened.
     pub fn maybe_flush(&self, min_idle: Duration, force: bool) -> BiResult<bool> {
-        if !self.dirty.load(Ordering::Acquire) {
+        if self.dirty.load(Ordering::Acquire) == 0 {
             return Ok(false);
         }
         if !force && self.last_change.lock().elapsed() < min_idle {
@@ -190,43 +202,48 @@ impl ProjectIndex {
     }
 
     fn persist_now(&self) -> BiResult<bool> {
-        let inner = self.inner.lock();
-        // Write to temp files then rename, so a crash mid-write never
-        // corrupts the on-disk index.
+        // Capture the mutation generation up front and only clear the dirty
+        // counter if it is unchanged after the write — a concurrent
+        // add()/add_batch() during serialization must keep its dirty bit
+        // so the just-added vectors are not lost on exit (#457).
+        let dirty_gen = self.dirty.load(Ordering::Acquire);
         let tmp_index = self.file_path.with_extension("tvim.tmp");
-        inner
-            .index
-            .write(&tmp_index)
-            .map_err(|e| BiError::Index(format!("write: {e}")))?;
+        let (map, next_extid) = {
+            let inner = self.inner.lock();
+            inner
+                .index
+                .write(&tmp_index)
+                .map_err(|e| BiError::Index(format!("write: {e}")))?;
+            (inner.uid_to_extid.clone(), inner.next_extid)
+        };
+        let tvim_len = std::fs::metadata(&tmp_index)?.len();
         let meta = meta_path_for(&self.file_path);
         let tmp_meta = meta.with_extension("json.tmp");
-        let tvim_len = std::fs::metadata(&tmp_index)?.len();
         let envelope = UidMapEnvelope {
             version: 1,
             tvim_len,
-            next_extid: inner.next_extid,
-            map: inner.uid_to_extid.clone(),
+            next_extid,
+            map,
         };
+        let mut buf = Vec::new();
+        serde_json::to_writer(&mut buf, &envelope)?;
         {
-            let file = std::fs::File::create(&tmp_meta)?;
-            let mut w = std::io::BufWriter::new(file);
-            serde_json::to_writer(&mut w, &envelope)?;
-            w.flush()?;
+            let mut file = std::fs::File::create(&tmp_meta)?;
+            file.write_all(&buf)?;
+            file.flush()?;
         }
-        // Durable persist: fsync both temp files before the renames, then
-        // fsync the directory so the renames themselves survive a crash.
         std::fs::File::open(&tmp_index)?.sync_all()?;
         std::fs::File::open(&tmp_meta)?.sync_all()?;
-        drop(inner);
         std::fs::rename(&tmp_index, &self.file_path)?;
         std::fs::rename(&tmp_meta, &meta)?;
         if let Some(dir) = self.file_path.parent() {
-            // Directory fsync is unsupported on some platforms; ignore.
             if let Ok(dir_file) = std::fs::File::open(dir) {
                 let _ = dir_file.sync_all();
             }
         }
-        self.dirty.store(false, Ordering::Release);
+        let _ = self
+            .dirty
+            .compare_exchange(dirty_gen, 0, Ordering::AcqRel, Ordering::Acquire);
         Ok(true)
     }
 
@@ -317,31 +334,27 @@ impl ProjectIndex {
     }
 
     pub fn uid_digest(&self) -> String {
-        let inner = self.inner.lock();
-        let mut uids: Vec<&str> = inner.uid_to_extid.keys().map(String::as_str).collect();
-        uids.sort_unstable();
-        let mut hasher = sha2::Sha256::new();
-        use sha2::Digest;
-        for uid in uids {
-            hasher.update(uid.as_bytes());
-            hasher.update([0]);
-        }
-        hex::encode(hasher.finalize())
+        self.inner.lock().uid_set_digest.clone()
     }
 
     pub fn replace_all(&self, items: &[(String, Vec<f32>)]) -> BiResult<()> {
+        let mut new_inner = Inner {
+            index: IdMapIndex::new(self.dim, self.bit_width)
+                .map_err(|e| BiError::Index(format!("new replacement index: {e}")))?,
+            uid_to_extid: HashMap::new(),
+            extid_to_uid: HashMap::new(),
+            next_extid: 1,
+            uid_set_digest: String::new(),
+        };
+        for (uid, vector) in items {
+            new_inner.add_one(uid, vector)?;
+        }
+        new_inner.recompute_digest();
         {
             let mut inner = self.inner.lock();
-            *inner = Inner {
-                index: IdMapIndex::new(self.dim, self.bit_width)
-                    .map_err(|e| BiError::Index(format!("new replacement index: {e}")))?,
-                uid_to_extid: HashMap::new(),
-                extid_to_uid: HashMap::new(),
-                next_extid: 1,
-            };
+            *inner = new_inner;
         }
         self.mark_dirty();
-        self.add_batch(items)?;
         Ok(())
     }
 
@@ -351,6 +364,18 @@ impl ProjectIndex {
 }
 
 impl Inner {
+    fn recompute_digest(&mut self) {
+        let mut uids: Vec<&str> = self.uid_to_extid.keys().map(String::as_str).collect();
+        uids.sort_unstable();
+        let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
+        for uid in uids {
+            hasher.update(uid.as_bytes());
+            hasher.update([0]);
+        }
+        self.uid_set_digest = hex::encode(hasher.finalize());
+    }
+
     fn add_one(&mut self, uid: &str, vector: &[f32]) -> BiResult<()> {
         let extid = match self.uid_to_extid.get(uid) {
             Some(&id) => {

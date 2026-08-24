@@ -1,10 +1,31 @@
 use crate::db::log_activity;
-use crate::error::BiResult;
+use crate::error::{BiError, BiResult};
 use crate::memory;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+/// Minimum cosine similarity in the embedding index for two memories to be
+/// considered duplicate candidates. Overridable via `BITURBO_DEDUP_COSINE`
+/// so deployments can tighten auto-merge (#443).
+fn duplicate_cosine_threshold() -> f32 {
+    std::env::var("BITURBO_DEDUP_COSINE")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(0.95)
+}
+/// Minimum token-set Jaccard similarity for the two texts to be merged. This
+/// guards against near-duplicate-but-distinct memories that score highly in
+/// embedding space but differ in meaning (e.g. "staging" vs "production").
+/// Overridable via `BITURBO_DEDUP_TOKEN_SIMILARITY`.
+fn min_token_similarity() -> f32 {
+    std::env::var("BITURBO_DEDUP_TOKEN_SIMILARITY")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .filter(|v| (0.0..=1.0).contains(v))
+        .unwrap_or(0.85)
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConsolidateReport {
     pub decayed: usize,
@@ -13,15 +34,31 @@ pub struct ConsolidateReport {
     pub removed: usize,
 }
 
-pub fn consolidate(state: &AppState, project_id: Option<&str>) -> BiResult<ConsolidateReport> {
+pub fn consolidate(
+    state: &AppState,
+    project_id: Option<&str>,
+    op_id: Option<&str>,
+) -> BiResult<ConsolidateReport> {
     let decayed = apply_decay(state, project_id)?;
+    if let Some(id) = op_id {
+        if crate::operations::is_cancel_requested(state, id)? {
+            crate::operations::mark_cancelled(state, id)?;
+            return Err(BiError::Invalid("operation cancelled".into()));
+        }
+    }
     let mut report = ConsolidateReport {
         decayed,
         ..Default::default()
     };
-    let dupes = find_duplicates(state, project_id)?;
+    let dupes = find_duplicates(state, project_id, op_id)?;
     report.duplicates_found = dupes.len();
     for (keep_uid, drop_uid) in dupes {
+        if let Some(id) = op_id {
+            if crate::operations::is_cancel_requested(state, id)? {
+                crate::operations::mark_cancelled(state, id)?;
+                return Err(BiError::Invalid("operation cancelled".into()));
+            }
+        }
         if merge_pair(state, &keep_uid, &drop_uid)? {
             report.merged += 1;
             report.removed += 1;
@@ -42,7 +79,6 @@ pub fn consolidate(state: &AppState, project_id: Option<&str>) -> BiResult<Conso
 
     Ok(report)
 }
-
 /// Pure decay computation (issue #435): importance is always recomputed from
 /// the fixed `decay_base` baseline, never from the already-decayed stored
 /// value, so repeated consolidate runs converge instead of compounding.
@@ -68,82 +104,88 @@ fn decayed_importance(
 
 fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
     let now = chrono::Utc::now().timestamp_millis();
-    let conn = state.db.conn()?;
-
-    let rows: Vec<(String, f64, Option<f64>, i64, i64, i64)> = match project_id {
-        Some(p) => {
-            let mut stmt = conn.prepare(
+    // Read, compute, and write inside ONE transaction (#450): computing the
+    // deltas outside let a concurrent remember/update between the read and
+    // the write be silently clobbered by the stale decay value.
+    state.db.write(|tx| {
+        let select_sql = match project_id {
+            Some(_) => {
                 "SELECT uid, importance, decay_base, created_at, access_count, last_access
-                 FROM memories WHERE project_id = ?1",
-            )?;
-            let v: Vec<_> = stmt
-                .query_map(rusqlite::params![p], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, f64>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, i64>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, i64>(5)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            v
-        }
-        None => {
-            let mut stmt = conn.prepare(
-                "SELECT uid, importance, decay_base, created_at, access_count, last_access
-                 FROM memories",
-            )?;
-            let v: Vec<_> = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, f64>(1)?,
-                        r.get::<_, Option<f64>>(2)?,
-                        r.get::<_, i64>(3)?,
-                        r.get::<_, i64>(4)?,
-                        r.get::<_, i64>(5)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            v
-        }
-    };
-    // Compute new importances first, then apply every change inside ONE
-    // transaction with a cached statement — previously each row was its own
-    // autocommit transaction.
-    let mut updates: Vec<(String, f32)> = Vec::new();
-    for (uid, importance, decay_base, created_at, access_count, last_access) in rows {
-        // Effective baseline: rows predating the decay_base backfill fall back
-        // to the stored importance.
-        let base = decay_base.unwrap_or(importance);
-        let new_imp = decayed_importance(base, created_at, now, access_count, last_access);
-        if (new_imp - importance as f32).abs() > 0.001 {
-            updates.push((uid, new_imp));
-        }
-    }
-    drop(conn);
-
-    let touched = updates.len();
-    if !updates.is_empty() {
-        state.db.write(|tx| {
-            let mut stmt =
-                tx.prepare_cached("UPDATE memories SET importance = ?1 WHERE uid = ?2")?;
-            for (uid, new_imp) in &updates {
-                stmt.execute(rusqlite::params![new_imp, uid])?;
+                 FROM memories WHERE project_id = ?1"
             }
-            Ok(())
-        })?;
-    }
-    Ok(touched)
+            None => {
+                "SELECT uid, importance, decay_base, created_at, access_count, last_access
+                 FROM memories"
+            }
+        };
+        let mut stmt = tx.prepare(select_sql)?;
+        let map_row =
+            |r: &rusqlite::Row<'_>| -> rusqlite::Result<(String, f64, Option<f64>, i64, i64, i64)> {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, Option<f64>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            };
+        let rows: Vec<(String, f32)> = match project_id {
+            Some(p) => stmt
+                .query_map(rusqlite::params![p], map_row)?
+                .filter_map(|r| r.ok())
+                .filter_map(
+                    |(uid, importance, decay_base, created_at, access_count, last_access)| {
+                        let base = decay_base.unwrap_or(importance);
+                        let new_imp =
+                            decayed_importance(base, created_at, now, access_count, last_access);
+                        ((new_imp - importance as f32).abs() > 0.001).then_some((uid, new_imp))
+                    },
+                )
+                .collect(),
+            None => stmt
+                .query_map([], map_row)?
+                .filter_map(|r| r.ok())
+                .filter_map(
+                    |(uid, importance, decay_base, created_at, access_count, last_access)| {
+                        let base = decay_base.unwrap_or(importance);
+                        let new_imp =
+                            decayed_importance(base, created_at, now, access_count, last_access);
+                        ((new_imp - importance as f32).abs() > 0.001).then_some((uid, new_imp))
+                    },
+                )
+                .collect(),
+        };
+        drop(stmt);
+
+        let mut update = tx.prepare_cached("UPDATE memories SET importance = ?1 WHERE uid = ?2")?;
+        for (uid, new_imp) in &rows {
+            update.execute(rusqlite::params![new_imp, uid])?;
+        }
+        Ok(rows.len())
+    })
 }
 
-fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(String, String)>> {
+/// Simple token-set Jaccard similarity, case-insensitive.
+fn token_jaccard_similarity(a: &str, b: &str) -> f32 {
+    if a == b {
+        return 1.0;
+    }
+    let a: HashSet<String> = a.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let b: HashSet<String> = b.split_whitespace().map(|t| t.to_lowercase()).collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let intersection: HashSet<_> = a.intersection(&b).collect();
+    let union: HashSet<_> = a.union(&b).collect();
+    intersection.len() as f32 / union.len() as f32
+}
+
+fn find_duplicates(
+    state: &AppState,
+    project_id: Option<&str>,
+    op_id: Option<&str>,
+) -> BiResult<Vec<(String, String)>> {
     let conn = state.db.conn()?;
     let project_ids: Vec<String> = match project_id {
         Some(p) => vec![p.to_string()],
@@ -161,12 +203,24 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
 
     let mut dupes: HashSet<(String, String)> = HashSet::new();
     for pid in project_ids {
+        if let Some(id) = op_id {
+            if crate::operations::is_cancel_requested(state, id)? {
+                crate::operations::mark_cancelled(state, id)?;
+                return Err(BiError::Invalid("operation cancelled".into()));
+            }
+        }
         // Process in batches to bound RAM. Skip code-type memories —
         // deduplicating code chunks is expensive and rarely useful.
         let idx = state.get_or_load_index(&pid)?;
         let mut offset = 0usize;
         const BATCH: usize = 1000;
         loop {
+            if let Some(id) = op_id {
+                if crate::operations::is_cancel_requested(state, id)? {
+                    crate::operations::mark_cancelled(state, id)?;
+                    return Err(BiError::Invalid("operation cancelled".into()));
+                }
+            }
             // Page candidates directly (issue #436): memory::list has no
             // superseded_by filter, so it could pair an active memory with a
             // zombie copy. Only active rows are eligible for merging.
@@ -195,12 +249,16 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
             let by_uid: std::collections::HashMap<&str, &(String, String, f64)> =
                 rows.iter().map(|r| (r.0.as_str(), r)).collect();
             let texts: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
-            let embeddings = state.embedder_for_project(&pid)?.embed_batch(&texts)?;
+            let embeddings = state
+                .embedder_for_project(&pid)?
+                // Bulk dedup should not evict user query embeddings from the
+                // LRU cache; use the cache-bypassing path (#452).
+                .embed_batch_uncached(&texts)?;
             for (i, vec) in embeddings.iter().enumerate() {
                 let a = &rows[i];
                 let hits = idx.search(vec, 5, None)?;
                 for h in hits {
-                    if h.score < 0.95 || h.uid == a.0 {
+                    if h.score < duplicate_cosine_threshold() || h.uid == a.0 {
                         continue;
                     }
                     if let Some(b) = by_uid.get(h.uid.as_str()) {
@@ -209,6 +267,10 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
                         } else {
                             (b.0.clone(), a.0.clone())
                         };
+                        let similarity = token_jaccard_similarity(&a.1, &b.1);
+                        if similarity < min_token_similarity() {
+                            continue;
+                        }
                         dupes.insert((keep, drop_));
                     }
                 }
@@ -225,12 +287,12 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
 fn merge_pair(state: &AppState, keep_uid: &str, drop_uid: &str) -> BiResult<bool> {
     let keep = memory::get(state, keep_uid)?;
     let drop_ = memory::get(state, drop_uid)?;
-    let (Some(keep), Some(_drop_)) = (keep, drop_) else {
+    let (Some(keep), Some(drop_mem)) = (keep, drop_) else {
         return Ok(false);
     };
 
     let mut merged_tags: Vec<String> = keep.tags.clone();
-    for t in &_drop_.tags {
+    for t in &drop_mem.tags {
         if !merged_tags.contains(t) {
             merged_tags.push(t.clone());
         }
@@ -258,12 +320,29 @@ fn merge_pair(state: &AppState, keep_uid: &str, drop_uid: &str) -> BiResult<bool
                AND EXISTS(SELECT 1 FROM memories k WHERE k.uid = ?1 AND k.superseded_by IS NULL)",
             rusqlite::params![keep_uid, now, drop_uid],
         )?;
+        if n > 0 {
+            crate::persistence::queue_index_delete(tx, &keep.project_id, drop_uid)?;
+            // #444: fold the dropped memory's engagement into the survivor so
+            // the merge is not lossy.
+            tx.execute(
+                "UPDATE memories SET access_count = access_count + ?1,
+                                     importance = MAX(importance, ?2),
+                                     updated_at = ?3
+                 WHERE uid = ?4 AND superseded_by IS NULL",
+                rusqlite::params![drop_mem.access_count, drop_mem.importance, now, keep_uid],
+            )?;
+            tx.execute(
+                "UPDATE projects SET memory_count = MAX(0, memory_count - 1), updated_at = ?1
+                 WHERE id = ?2",
+                rusqlite::params![now, &keep.project_id],
+            )?;
+        }
         Ok(n)
     })?;
     if superseded == 0 {
         return Ok(false);
     }
-    memory::forget(state, drop_uid)?;
+    state.replay_index_mutations(&keep.project_id)?;
     Ok(true)
 }
 

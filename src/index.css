@@ -35,6 +35,7 @@
   --bg-rgb: 15 14 12;
   --surface-rgb: 24 22 19;
   --surface-2-rgb: 33 30 26;
+  --surface-3-rgb: 42 38 32;
   --border-rgb: 50 45 38;
   --text-rgb: 232 226 214;
   --text-muted-rgb: 148 137 122;
@@ -123,6 +124,7 @@
   --bg-rgb: 246 241 232;
   --surface-rgb: 255 252 245;
   --surface-2-rgb: 240 233 220;
+  --surface-3-rgb: 230 220 201;
   --border-rgb: 217 207 184;
   --text-rgb: 31 27 22;
   --text-muted-rgb: 107 95 75;

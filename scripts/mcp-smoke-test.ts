@@ -14,7 +14,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 type RpcId = number;
 interface RpcRequest {
@@ -35,6 +34,12 @@ interface RpcNotification {
   params?: unknown;
 }
 
+/** Awaiting RPC: resolvers kept so transport errors can fail pending calls. */
+interface PendingRpc {
+  resolve: (r: RpcResponse) => void;
+  reject: (e: Error) => void;
+}
+
 interface TestCase {
   name: string;
   tool: string;
@@ -42,6 +47,7 @@ interface TestCase {
   expect?: (r: unknown) => true | string;
   skip?: boolean | (() => boolean);
   note?: string;
+  optional?: boolean;
 }
 
 const COL = {
@@ -59,33 +65,38 @@ const arg = (k: string, def?: string) => {
   const a = argv.find((x) => x.startsWith(`--${k}=`));
   return a ? a.split("=", 2)[1] : def;
 };
-const flag = (k: string) => argv.includes(`--${k}`);
 
 function findBinary(): string {
   const explicit = arg("bin");
   if (explicit) return explicit;
-  // Common locations.
+  const ext = process.platform === "win32" ? ".exe" : "";
   const candidates = [
-    resolve(process.cwd(), "src-tauri/target/debug/biturbo-mcp"),
-    resolve(process.cwd(), "src-tauri/target/release/biturbo-mcp"),
-    resolve(process.cwd(), "../src-tauri/target/debug/biturbo-mcp"),
-    resolve(process.cwd(), "../src-tauri/target/release/biturbo-mcp"),
+    resolve(process.cwd(), `src-tauri/target/debug/biturbo-mcp${ext}`),
+    resolve(process.cwd(), `src-tauri/target/release/biturbo-mcp${ext}`),
+    resolve(process.cwd(), `../src-tauri/target/debug/biturbo-mcp${ext}`),
+    resolve(process.cwd(), `../src-tauri/target/release/biturbo-mcp${ext}`),
   ];
   for (const c of candidates) if (existsSync(c)) return c;
-  // Fall back to PATH.
-  return "biturbo-mcp";
+  return `biturbo-mcp${ext}`;
 }
 
 class McpClient {
   private proc: ChildProcessWithoutNullStreams;
   private buf = "";
-  private pending = new Map<RpcId, (r: RpcResponse) => void>();
+  private pending = new Map<RpcId, PendingRpc>();
   private nextId = 1;
   private toolNames = new Set<string>();
 
   constructor(bin: string) {
     this.proc = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
     this.proc.stdout.on("data", (chunk: Buffer) => this.onStdout(chunk));
+    this.proc.on("error", (err) => {
+      this.rejectPending(new Error(`biturbo-mcp process error: ${err.message}`));
+    });
+    this.proc.stdin.on("error", (err) => {
+      this.rejectPending(new Error(`biturbo-mcp stdin error: ${err.message}`));
+    });
+    // (#543) Reject in-flight RPCs when the child process or its stdin dies instead of crashing.
     this.proc.stderr.on("data", (chunk: Buffer) => {
       const s = chunk.toString("utf8");
       if (process.env.MCP_TEST_VERBOSE) process.stderr.write(`[mcp-stderr] ${s}`);
@@ -114,27 +125,46 @@ class McpClient {
         continue;
       }
       if ("id" in parsed && parsed.id !== undefined && this.pending.has(parsed.id as RpcId)) {
-        this.pending.get(parsed.id as RpcId)!(parsed as RpcResponse);
+        const entry = this.pending.get(parsed.id as RpcId)!;
         this.pending.delete(parsed.id as RpcId);
+        entry.resolve(parsed as RpcResponse);
       } else if ("method" in parsed) {
         // Notification from server. Ignore for now.
       }
     }
   }
 
+  private rejectPending(err: Error) {
+    for (const [, entry] of this.pending) entry.reject(err);
+    this.pending.clear();
+  }
+
   private send(req: RpcRequest): Promise<RpcResponse> {
-    return new Promise((resolveP, rejectP) => {
-      const id = req.id;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        rejectP(new Error(`RPC ${req.method} timed out`));
-      }, 15_000);
-      this.pending.set(id, (r) => {
+    const id = req.id;
+    const { promise, resolve, reject } = Promise.withResolvers<RpcResponse>();
+    const timer = setTimeout(() => {
+      const entry = this.pending.get(id);
+      this.pending.delete(id);
+      entry?.reject(new Error(`RPC ${req.method} timed out`));
+    }, 15_000);
+    this.pending.set(id, {
+      resolve: (r) => {
         clearTimeout(timer);
-        resolveP(r);
-      });
-      this.proc.stdin.write(JSON.stringify(req) + "\n");
+        resolve(r);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
     });
+    try {
+      this.proc.stdin.write(JSON.stringify(req) + "\n");
+    } catch (e) {
+      this.pending.delete(id);
+      clearTimeout(timer);
+      reject(e instanceof Error ? e : new Error(String(e)));
+    }
+    return promise;
   }
 
   async call(method: string, params?: unknown): Promise<RpcResponse> {
@@ -166,7 +196,13 @@ class McpClient {
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     const r = await this.call("tools/call", { name, arguments: args });
     if (r.error) return { _error: r.error };
-    return (r.result as { content?: Array<{ type: string; text?: string }> });
+    const result = r.result as { isError?: boolean; content?: Array<{ type: string; text?: string }> } | undefined;
+    const text = (result?.content ?? [])
+      .filter((c) => c.type === "text" && typeof c.text === "string")
+      .map((c) => c.text!)
+      .join("\n");
+    // (#535) Surface the tool-level isError flag so tests observe actual tool failures.
+    return { _isError: result?.isError === true, _text: text, content: result?.content ?? [] };
   }
 
   close() {
@@ -182,9 +218,14 @@ function isNonEmptyString(x: unknown): x is string {
   return typeof x === "string" && x.length > 0;
 }
 
+function isErrorResult(result: unknown): boolean {
+  return result !== null && typeof result === "object" && (result as { _isError?: boolean })._isError === true;
+}
+
 function extractText(result: unknown): string {
   if (!result || typeof result !== "object") return "";
-  const r = result as { content?: Array<{ type: string; text?: string }> };
+  const r = result as { _text?: string; content?: Array<{ type: string; text?: string }> };
+  if (typeof r._text === "string") return r._text;
   if (!Array.isArray(r.content)) return "";
   return r.content
     .filter((c) => c.type === "text" && isNonEmptyString(c.text))
@@ -381,8 +422,9 @@ const tests: TestCase[] = [
     name: "cancel_operation",
     tool: "cancel_operation",
     args: () => ({ id: OPERATION_HOLDER.id ?? "" }),
-    skip: () => !OPERATION_HOLDER.id,
     expect: (r) => {
+      // (#537) Cancel after an instant empty ingest may already be terminal; isError is a valid outcome.
+      if (isErrorResult(r)) return true;
       const j = extractJson(r) as { id?: string } | null;
       return j?.id === OPERATION_HOLDER.id || "cancel returned wrong operation";
     },
@@ -393,7 +435,13 @@ const tests: TestCase[] = [
     args: () => ({ id: OPERATION_HOLDER.id ?? "" }),
     skip: () => !OPERATION_HOLDER.id,
     note: "a completed operation should reject retry while still round-tripping a structured error",
-    expect: () => true,
+    expect: (r) => {
+      if (isErrorResult(r)) return true;
+      const j = extractJson(r) as { id?: string } | null;
+      if (j?.id === OPERATION_HOLDER.id) return true;
+      const text = extractText(r);
+      return (text && /not (cancellable|found)|already|cannot|error/i.test(text)) || "expected a terminal error for retry";
+    },
   },
   {
     name: "stats",
@@ -413,48 +461,62 @@ const tests: TestCase[] = [
     name: "consolidate_status",
     tool: "consolidate_status",
     note: "optional on some builds",
-    expect: () => true,
+    optional: true,
+    expect: (r) => {
+      const j = extractJson(r);
+      return (j !== null && typeof j === "object") || "consolidate_status did not return an object";
+    },
   },
   {
     name: "bootstrap",
     tool: "bootstrap",
     note: "optional — convenience aggregator",
-    expect: () => true,
+    optional: true,
+    expect: (r) => {
+      const j = extractJson(r);
+      return (j !== null && typeof j === "object") || "bootstrap did not return an object";
+    },
   },
   {
     name: "ingest_project (no-op path)",
     tool: "ingest_project",
     args: { project_id: TEST_PROJECT, root_path: "/nonexistent-smoke-path" },
-    note: "expected to fail with a clear error — we just check the call round-trips",
-    expect: (r) => {
-      // We accept either success-with-error or a structured error response.
-      return true;
-    },
+    note: "expected to fail with a clear error",
+    expect: (r) => isErrorResult(r) || /error|failed|invalid|not found/i.test(extractText(r)) || "expected a clear error from the no-op path",
   },
   {
     name: "consolidate",
     tool: "consolidate",
     args: { project_id: TEST_PROJECT },
-    expect: () => true,
+    expect: (r) => !isErrorResult(r) || "consolidate returned an error",
   },
   {
     name: "forget",
     tool: "forget",
     args: () => ({ uid: TEST_UID_HOLDER.uid ?? "" }) as Record<string, unknown>,
     skip: () => !TEST_UID_HOLDER.uid,
-    expect: () => true,
+    expect: (r) => {
+      const j = extractJson(r) as { forgotten?: boolean } | null;
+      return j?.forgotten === true || "forget did not report deletion";
+    },
   },
   {
     name: "get_project_name_from_file",
     tool: "get_project_name_from_file",
-    args: { root_path: "/nonexistent/path" },
-    expect: () => true,
+    args: { root_path: EMPTY_INGEST_ROOT },
+    expect: (r) => {
+      const j = extractJson(r);
+      return (j !== null && typeof j === "object") || "get_project_name_from_file did not return an object";
+    },
   },
   {
     name: "delete_project",
     tool: "delete_project",
     args: { project_id: TEST_PROJECT },
-    expect: () => true,
+    expect: (r) => {
+      const j = extractJson(r) as { deleted?: string } | null;
+      return j?.deleted === TEST_PROJECT || "delete_project returned wrong id";
+    },
   },
 ];
 
@@ -464,20 +526,35 @@ async function main() {
   console.log(`${COL.dim}binary:${COL.reset} ${bin}`);
   if (!existsSync(bin) && !arg("bin")) {
     console.error(
-      `${COL.red}Could not locate biturbo-mcp. Pass --bin=/path or run ${COL.cyan}pnpm mcp:build${COL.red} first.${COL.reset}`,
+      `${COL.red}Could not locate biturbo-mcp. Pass --bin=/path or run ${COL.cyan}npm run mcp:build${COL.red} first.${COL.reset}`,
     );
     process.exit(2);
   }
+
+  const TEST_DATA_DIR = mkdtempSync(resolve(tmpdir(), "biturbo-mcp-data-"));
+  process.env.BITURBO_DATA_DIR = TEST_DATA_DIR;
 
   const client = new McpClient(bin);
   let pass = 0;
   let fail = 0;
   let skipped = 0;
+  let missingSkips = 0;
   const results: Array<{ name: string; status: "PASS" | "FAIL" | "SKIP"; detail?: string; ms: number }> = [];
+  const OPTIONAL = new Set(["consolidate_status", "bootstrap"]);
 
   try {
     await client.initialize();
     const tools = await client.listTools();
+    if (tools.length === 0) {
+      throw new Error("server exposed zero tools");
+    }
+    const missingRequired = [...new Set(tests.map((t) => t.tool))].filter(
+      (tool) => !OPTIONAL.has(tool) && !client["toolNames"].has(tool),
+    );
+    if (missingRequired.length > 0) {
+      throw new Error(`missing required tools: ${missingRequired.join(", ")}`);
+    }
+    // (#536) Missing required tools are now hard failures; the harness no longer exits 0 on skipped coverage.
     console.log(`${COL.dim}discovered ${tools.length} tools${COL.reset}\n`);
 
     for (const t of tests) {
@@ -489,6 +566,7 @@ async function main() {
       }
       if (!client["toolNames"].has(t.tool)) {
         skipped++;
+        missingSkips++;
         results.push({
           name: t.name,
           status: "SKIP",
@@ -538,6 +616,7 @@ async function main() {
   } finally {
     client.close();
     rmSync(EMPTY_INGEST_ROOT, { recursive: true, force: true });
+    rmSync(TEST_DATA_DIR, { recursive: true, force: true });
   }
 
   const padName = Math.max(...results.map((r) => r.name.length), 20);
@@ -559,6 +638,12 @@ async function main() {
     `\n${COL.bold}summary:${COL.reset} ${COL.green}${pass} pass${COL.reset} · ${fail ? COL.red : COL.dim}${fail} fail${COL.reset} · ${COL.yellow}${skipped} skip${COL.reset} · ${total} total`,
   );
   if (fail > 0) process.exit(1);
+  if (missingSkips > OPTIONAL.size) {
+    console.error(
+      `${COL.red}Too many tools missing: ${missingSkips} skipped; only ${OPTIONAL.size} optional tools allowed${COL.reset}`,
+    );
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {

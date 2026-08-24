@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "../lib/store";
 import { api } from "../lib/api";
 import { Bot, Plus, RefreshCw } from "lucide-react";
@@ -16,6 +16,14 @@ export function Agents() {
   const [kind, setKind] = useState(KINDS[0]);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Ticker so "active now"/"today" badges re-evaluate as time passes
+  // instead of freezing at whatever Date.now() was on the last render.
+// (#523) Re-evaluate the "active now" badge against the current time on a short interval.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   async function refresh() {
     if (refreshing) return;
@@ -119,7 +127,7 @@ conflict://4
         {agents.map((a) => {
           const activityCount = activity.filter((ev) => ev.agent_id === a.id).length;
           // Honest activity tiers: only genuinely recent activity pulses.
-          const age = Date.now() - a.last_seen;
+          const age = now - a.last_seen;
           const isActiveNow = age < 5 * 60 * 1000;
           const isToday = age < 24 * 60 * 60 * 1000;
           const daysAgo = Math.floor(age / (24 * 60 * 60 * 1000));

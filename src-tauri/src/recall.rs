@@ -51,6 +51,7 @@ pub fn explain(
     } else {
         project_id
     };
+    let recall_id = format!("recall-{}", uuid::Uuid::new_v4());
     let hits = memory::search(state, project_id, query, k, mem_type)?;
     let candidate_k = (k.clamp(1, 100) * 3).max(30);
     let allowlist: Option<Vec<String>> = if let Some(mem_type) = mem_type {
@@ -63,6 +64,14 @@ pub fn explain(
     } else {
         None
     };
+    if allowlist.as_ref().is_some_and(Vec::is_empty) {
+        // No candidates for this mem_type: avoid turbovec's empty-allowlist
+        // panic and skip loading an embedding model (#433).
+        return Ok(RecallResponse {
+            recall_id,
+            results: Vec::new(),
+        });
+    }
     let vector_hits =
         state.embed_and_search(project_id, query, candidate_k, allowlist.as_deref())?;
     let conn = state.db.conn()?;
@@ -109,7 +118,7 @@ pub fn explain(
             }
         })
         .collect();
-    let recall_id = format!("recall-{}", uuid::Uuid::new_v4());
+    // recall_id generated at the top of the function
     let result_uids: Vec<&str> = results
         .iter()
         .map(|item| item.hit.memory.uid.as_str())
@@ -121,13 +130,24 @@ pub fn explain(
             "INSERT INTO recall_events(id, project_id, query_hash, result_uids, explanations, created_at)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
-                recall_id,
+                &recall_id,
                 project_id,
                 hash_query(query),
                 serde_json::to_string(&result_uids)?,
                 serde_json::to_string(&explanations)?,
                 chrono::Utc::now().timestamp_millis()
             ],
+        )?;
+        tx.execute(
+            "DELETE FROM recall_events
+             WHERE project_id = ?1
+               AND id NOT IN (
+                   SELECT id FROM recall_events
+                   WHERE project_id = ?1
+                   ORDER BY created_at DESC
+                   LIMIT ?2
+               )",
+            rusqlite::params![project_id, 1000i64],
         )?;
         Ok(())
     })?;
@@ -174,12 +194,29 @@ pub(crate) fn ranking_boosts(memory: &memory::Memory, terms: &[String]) -> Ranki
         .iter()
         .filter(|term| content.contains(term.as_str()))
         .count();
+    // Require word-boundary or equality tag matches; ignore very short tags (#440).
     let tag_matches = terms
         .iter()
         .filter(|term| {
             memory.tags.iter().any(|tag| {
                 let tag = tag.to_lowercase();
-                tag.contains(term.as_str()) || term.contains(&tag)
+                tag.as_str() == term.as_str()
+                    || (tag.chars().count() >= 3
+                        && tag.find(term.as_str()).is_some_and(|start| {
+                            let end = start + term.len();
+                            let prev = if start > 0 {
+                                tag[..start].chars().next_back()
+                            } else {
+                                None
+                            };
+                            let next = if end < tag.len() {
+                                tag[end..].chars().next()
+                            } else {
+                                None
+                            };
+                            !prev.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                                && !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        }))
             })
         })
         .count();
@@ -227,9 +264,10 @@ pub(crate) fn apply_ranking_boost(
     terms: &[String],
 ) -> f32 {
     let boosts = ranking_boosts(memory, terms);
-    base_score * boosts.multiplier + boosts.importance_boost
+    // #441: keep importance and feedback as multipliers of the small RRF
+    // base score so additive terms do not dominate query relevance.
+    base_score * (boosts.multiplier + boosts.importance_boost)
 }
-
 pub fn submit_feedback(
     state: &AppState,
     recall_id: &str,
@@ -272,6 +310,14 @@ pub fn submit_feedback(
                 chrono::Utc::now().timestamp_millis()
             ],
         )?;
+        // recall_feedback grows with every submit; keep the newest rows per
+        // the same retention window as recall_events (#438).
+        tx.execute(
+            "DELETE FROM recall_feedback WHERE id NOT IN (
+                 SELECT id FROM recall_feedback ORDER BY created_at DESC LIMIT 5000
+             )",
+            [],
+        )?;
         Ok(())
     })
 }
@@ -298,7 +344,7 @@ pub fn feedback_boosts(state: &AppState, uids: &[String]) -> BiResult<HashMap<St
     Ok(rows.filter_map(Result::ok).collect())
 }
 
-fn normalized_terms(query: &str) -> Vec<String> {
+pub(crate) fn normalized_terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()
         .map(|term| {

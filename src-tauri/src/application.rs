@@ -1,6 +1,6 @@
 //! Transport-neutral application interface shared by Tauri and MCP adapters.
 
-use crate::error::BiResult;
+use crate::error::{BiError, BiResult};
 use crate::memory;
 use crate::project::{self, Project};
 use crate::state::AppState;
@@ -134,6 +134,11 @@ pub fn register_agent(
 ) -> BiResult<AgentEntry> {
     let now = chrono::Utc::now().timestamp_millis();
     let id = slugify(&name);
+    if id.is_empty() {
+        return Err(BiError::Invalid(format!(
+            "agent name '{name}' contains no valid identifier characters"
+        )));
+    }
     let meta_json = meta.as_ref().map(serde_json::Value::to_string);
     state.db.write(|tx| {
         tx.execute(

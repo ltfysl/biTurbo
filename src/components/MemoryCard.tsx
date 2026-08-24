@@ -19,6 +19,19 @@ interface MemoryCardProps {
   score?: number;
 }
 
+// (#518) Only compare stable fields so inline callbacks don't defeat memo().
+function arePropsEqual(prev: MemoryCardProps, next: MemoryCardProps) {
+  return (
+    prev.memory.uid === next.memory.uid &&
+    prev.memory.updated_at === next.memory.updated_at &&
+    prev.memory.content === next.memory.content &&
+    prev.memory.importance === next.memory.importance &&
+    prev.active === next.active &&
+    prev.score === next.score &&
+    prev.explanation === next.explanation
+  );
+}
+
 export const MemoryCard = memo(function MemoryCard({
   memory,
   active,
@@ -194,4 +207,4 @@ export const MemoryCard = memo(function MemoryCard({
       </div>
     </div>
   );
-});
+}, arePropsEqual);

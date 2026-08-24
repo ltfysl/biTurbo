@@ -12,12 +12,12 @@
 //! │   ├── embed              — fastembed (BGE) embeddings       │
 //! │   ├── ingest             — tree-sitter project indexing     │
 //! │   ├── consolidate        — decay / dedup / merge            │
-//! │   └── db                 — SQLite schema + connection pool  │
-//! └─────────────────────────────────────────────────────────────┘
 //!
 //! Data lives in the OS app-data dir (~/Library/Application Support/com.biturbo.app/
 //! on macOS, %APPDATA%\com.biturbo.app on Windows, ~/.local/share/com.biturbo.app on
 //! Linux). Both the GUI and the MCP server share the same on-disk state.
+
+pub const APP_DIR_NAME: &str = "com.biturbo.app";
 
 pub mod application;
 pub mod commands;
@@ -44,6 +44,7 @@ pub use state::AppState;
 
 use std::sync::Arc;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tracing::info;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -67,7 +68,7 @@ fn init_logging(data_dir: &std::path::Path) {
             layer()
                 .compact()
                 .with_target(false)
-                .with_writer(std::io::stdout),
+                .with_writer(std::io::stderr),
         )
         .with(
             layer()
@@ -78,32 +79,114 @@ fn init_logging(data_dir: &std::path::Path) {
         .init();
 }
 
+fn show_error_and_exit<R: tauri::Runtime>(app: &tauri::App<R>, msg: String) -> ! {
+    let handle = app.handle().clone();
+    std::thread::spawn(move || {
+        handle
+            .dialog()
+            .message(msg)
+            .buttons(MessageDialogButtons::Ok)
+            .blocking_show();
+    })
+    .join()
+    .ok();
+    std::process::exit(1);
+}
+
+fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
+    let data_dir = match dirs::data_dir() {
+        Some(d) => d.join(crate::APP_DIR_NAME),
+        None => {
+            tracing::error!("no data dir");
+            return None;
+        }
+    };
+    std::fs::create_dir_all(&data_dir).ok();
+    let lock_path = data_dir.join("biturbo.instance.lock");
+    let lock = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!(
+                "cannot open instance lock at {}: {}",
+                lock_path.display(),
+                e
+            );
+            return None;
+        }
+    };
+    let acquired = match fs4::fs_std::FileExt::try_lock_exclusive(&lock) {
+        Ok(acquired) => acquired,
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            tracing::error!("biTurbo is already running");
+            return None;
+        }
+        Err(e) => {
+            tracing::error!("cannot lock instance lock: {}", e);
+            return None;
+        }
+    };
+    if !acquired {
+        tracing::error!("biTurbo is already running");
+        return None;
+    }
+    Some(lock)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let _instance_guard: Option<std::fs::File> = if cfg!(desktop) {
+        let guard = try_acquire_single_instance_lock();
+        if guard.is_none() {
+            return;
+        }
+        guard
+    } else {
+        None
+    };
+
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             tray::setup(app)?;
 
-            let data_dir = app.path().app_data_dir().expect("app data dir resolvable");
+            let data_dir = match app.path().app_data_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    show_error_and_exit(app, format!("cannot resolve app data directory: {e}"))
+                }
+            };
             std::fs::create_dir_all(&data_dir).ok();
 
             init_logging(&data_dir);
 
+            std::panic::set_hook(Box::new(|info| {
+                let message = format!("{}", info);
+                tracing::error!("panic: {message}");
+                eprintln!("panic: {message}");
+            }));
+
             info!("biTurbo starting…");
 
-            let mut state = AppState::open(&data_dir).expect("open app state");
+            let mut state = match AppState::open(&data_dir) {
+                Ok(s) => s,
+                Err(e) => show_error_and_exit(app, format!("cannot open biTurbo state: {e}")),
+            };
             state.app = Some(app.handle().clone());
             let state_arc = Arc::new(state);
             scheduler::spawn(state_arc.clone());
-            let _ = operations::resume_pending(state_arc.clone());
+            if let Err(error) = operations::resume_pending(state_arc.clone()) {
+                tracing::error!("failed to resume pending operations: {error}");
+            }
             io::resume_watches(&state_arc);
             app.manage((*state_arc).clone());
             info!("biTurbo ready @ {}", data_dir.display());
@@ -125,7 +208,6 @@ pub fn run() {
             commands::delete_project,
             commands::ensure_project_marker_files,
             commands::get_project,
-            commands::ingest_project,
             commands::start_ingest,
             commands::ingest_multiple_projects,
             commands::operation_status,
@@ -145,12 +227,19 @@ pub fn run() {
             commands::list_agents,
             commands::register_agent,
             commands::recent_activity,
+            commands::open_file,
+            commands::reveal_file,
             commands::bootstrap,
             commands::resolve_mcp_binary_path,
             commands::install_mcp_config,
+            commands::mcp_config_status,
             commands::check_for_updates,
             commands::install_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(error) = run_result {
+        tracing::error!("error while running tauri application: {error}");
+        std::process::exit(1);
+    }
 }

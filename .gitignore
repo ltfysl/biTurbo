@@ -12,10 +12,20 @@ dist-ssr
 *.local
 
 # Build artifacts
+
+# AI / local tooling state
+.opencode/
+.omo/
+.mavis/
+.cursor/
+# Tracked AI-tooling state and local caches removed (#504).
+
 tsconfig.tsbuildinfo
 tsconfig.node.tsbuildinfo
 vite.config.d.ts
 vite.config.js
+# Compiled Vite config and tsbuildinfo artifacts removed (#497).
+
 
 # Editor
 .vscode/*
@@ -41,3 +51,4 @@ src-tauri/binaries/
 *.db-shm
 *.tv
 *.tvim
+package-lock.json

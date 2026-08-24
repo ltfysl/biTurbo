@@ -31,11 +31,23 @@ export interface MemoryWithScore extends Memory {
   score: number;
 }
 
+// (#529) Structured ranking boost breakdown.
+export interface RankingBoosts {
+  content_matches: number;
+  tag_matches: number;
+  path_matches: number;
+  language_match: boolean;
+  multiplier: number;
+  importance_boost: number;
+}
+
 export interface RecallExplanation {
   vector_rank: number | null;
   fts_rank: number | null;
   matched_terms: string[];
   feedback_boost: number;
+// (#529) Per-explanation boost breakdown; optional for backwards compatibility.
+  applied_boosts?: RankingBoosts;
 }
 
 export interface ExplainedMemory extends MemoryWithScore {
@@ -58,6 +70,8 @@ export interface Project {
   indexed_count: number;
   embed_model: string | null;
   watch_enabled: boolean;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface AgentEntry {
@@ -100,11 +114,6 @@ export interface IngestResult {
   edges_created: number;
 }
 
-export interface IngestJob {
-  job_id: string;
-  project_id: string;
-}
-
 export interface IngestProgress {
   project_id: string;
   phase: string;
@@ -127,6 +136,24 @@ export interface IngestError {
   job_id: string;
   project_id: string;
   error: string;
+}
+
+export interface MultiIngestResult {
+  results: IngestResult[];
+  total_files_indexed: number;
+  total_chunks_indexed: number;
+  total_bytes_processed: number;
+  total_errors: number;
+  total_edges_created: number;
+}
+
+export interface MultiIngestDone {
+  job_id: string;
+  total_files_indexed: number;
+  total_chunks_indexed: number;
+  total_edges_created: number;
+  elapsed_ms: number;
+  results: IngestResult[];
 }
 
 export interface Operation {
@@ -160,7 +187,7 @@ export interface ConsolidateStatus {
   last_report: ConsolidateReport | null;
   running: boolean;
   interval_secs: number;
-  queued?: boolean;
+  queued: boolean;
 }
 
 export interface BootstrapPayload {

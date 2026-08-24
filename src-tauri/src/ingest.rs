@@ -3,6 +3,7 @@ use crate::error::{BiError, BiResult};
 use crate::state::AppState;
 use ignore::WalkBuilder;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use streaming_iterator::StreamingIterator;
 use tauri::Emitter;
 use tracing;
@@ -18,6 +20,13 @@ use tree_sitter::{Language, Parser, Query, QueryCursor};
 const CHUNK_INSERT_BATCH: usize = 64;
 const PROGRESS_EVERY: usize = 16;
 const MAX_CHUNK_TEXT: usize = 4000;
+/// Files larger than this are skipped during ingest to bound memory (#239):
+/// tree-sitter parse trees dwarf source size and huge generated dumps would
+/// otherwise be fully buffered before rejection.
+const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+/// Bump this whenever the chunker, grammar versions, or query set change so
+/// unchanged files are re-indexed with the new rules (#403).
+const INDEXER_VERSION: &str = "2";
 /// Group at most this many chunks into one INSERT statement to stay
 /// under SQLite's 32 766 bound-variable limit (15 params per chunk).
 const SQL_INSERT_CHUNK_LIMIT: usize = 2000;
@@ -33,6 +42,11 @@ static PARSE_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
         .build()
         .expect("parse thread pool")
 });
+
+/// Serialize ingests per project (#236): watch-triggered and manual/multi
+/// ingests must not race on shared stale-uid/edge computations.
+static PROJECT_INGEST_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IngestResult {
@@ -113,21 +127,39 @@ pub(crate) fn ensure_biturboignore(root: &Path) -> BiResult<bool> {
 
     let gitignore = root.join(".gitignore");
     if gitignore.exists() {
-        let gitignore_content = std::fs::read_to_string(&gitignore)
-            .map_err(|e| BiError::Ingest(format!("failed to read {}: {e}", gitignore.display())))?;
-        content.push_str("# --- copied from .gitignore ---\n");
-        content.push_str(&gitignore_content);
-        if !content.ends_with('\n') {
-            content.push('\n');
+        match std::fs::read_to_string(&gitignore) {
+            Ok(gitignore_content) => {
+                content.push_str("# --- copied from .gitignore ---\n");
+                content.push_str(&gitignore_content);
+                if !content.ends_with('\n') {
+                    content.push('\n');
+                }
+            }
+            Err(e) => {
+                // Non-fatal (#241): fall back to the stub instead of failing
+                // an ingest on a read-only or unreadable checkout.
+                tracing::warn!("failed to read {}: {e}", gitignore.display());
+                content.push_str("# Examples:\n");
+                content.push_str("# dist/\n# target/\n# generated/\n# **/*.snap\n");
+            }
         }
     } else {
         content.push_str("# Examples:\n");
         content.push_str("# dist/\n# target/\n# generated/\n# **/*.snap\n");
     }
 
-    std::fs::write(&biturboignore, content).map_err(|e| {
-        BiError::Ingest(format!("failed to write {}: {e}", biturboignore.display()))
-    })?;
+    // Temp file + atomic rename keeps concurrent first ingests race-safe
+    // (#241): rename either fully succeeds or leaves the old state intact.
+    let tmp = root.join(format!(".biturboignore.tmp.{}", uuid::Uuid::new_v4()));
+    let written =
+        std::fs::write(&tmp, &content).and_then(|_| std::fs::rename(&tmp, &biturboignore));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(BiError::Ingest(format!(
+            "failed to write {}: {e}",
+            biturboignore.display()
+        )));
+    }
 
     Ok(true)
 }
@@ -145,9 +177,15 @@ struct PendingChunk {
 
 impl PendingChunk {
     fn embed_text(&self) -> String {
+        let mut code = self.code.clone();
+        let mut end_line = self.end_line;
+        if code.len() > MAX_CHUNK_TEXT {
+            code = code.chars().take(MAX_CHUNK_TEXT).collect();
+            end_line = self.start_line + code.matches('\n').count() as i64;
+        }
         let mut text = format!(
             "```{}\n// {}:{}-{}\n{}```\n{}",
-            self.language, self.file_path, self.start_line, self.end_line, self.code, self.language,
+            self.language, self.file_path, self.start_line, end_line, code, self.language,
         );
         if text.len() > MAX_CHUNK_TEXT {
             text = text.chars().take(MAX_CHUNK_TEXT).collect();
@@ -156,14 +194,16 @@ impl PendingChunk {
     }
 
     fn db_content(&self) -> String {
-        let mut text = format!(
-            "// {}:{}-{}\n{}",
-            self.file_path, self.start_line, self.end_line, self.code,
-        );
-        if text.len() > MAX_CHUNK_TEXT {
-            text = text.chars().take(MAX_CHUNK_TEXT).collect();
+        let mut code = self.code.clone();
+        let mut end_line = self.end_line;
+        if code.len() > MAX_CHUNK_TEXT {
+            code = code.chars().take(MAX_CHUNK_TEXT).collect();
+            end_line = self.start_line + code.matches('\n').count() as i64;
         }
-        text
+        format!(
+            "// {}:{}-{}\n{}",
+            self.file_path, self.start_line, end_line, code
+        )
     }
 }
 
@@ -193,6 +233,16 @@ pub fn ingest_project_controlled(
     if !root.is_dir() {
         return Err(BiError::Ingest(format!("not a dir: {}", root.display())));
     }
+    // Per-project ingest serialization (#236).
+    let project_lock = {
+        let mut locks = PROJECT_INGEST_LOCKS.lock();
+        Arc::clone(
+            locks
+                .entry(project_id.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    };
+    let _project_guard = project_lock.lock();
     check_cancelled(state, operation_id)?;
     if let Some(id) = operation_id {
         crate::operations::update_progress(state, id, "scanning", 0, 1, None)?;
@@ -202,11 +252,17 @@ pub fn ingest_project_controlled(
         ..Default::default()
     };
 
-    ensure_biturboignore(root)?;
+    // Optional convenience file: failures (read-only checkout, lost race)
+    // must not abort the ingest (#241).
+    if let Err(e) = ensure_biturboignore(root) {
+        tracing::warn!("could not ensure .biturboignore: {e}");
+    }
 
     emit_progress(state, project_id, "scanning", 0, 1, None, 0);
 
-    let files: Vec<PathBuf> = WalkBuilder::new(root)
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut walk_error_count = 0usize;
+    for entry_result in WalkBuilder::new(root)
         .follow_links(false)
         .standard_filters(true)
         .git_ignore(true)
@@ -214,12 +270,31 @@ pub fn ingest_project_controlled(
         .git_exclude(true)
         .ignore(true)
         .add_custom_ignore_filename(".biturboignore")
-        .hidden(false)
+        .max_filesize(Some(MAX_FILE_SIZE))
+        .filter_entry(is_vcs_meta_dir)
         .build()
-        .filter_map(|r| r.ok())
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| detect_language(e.path()).map(|_| e.path().to_path_buf()))
-        .collect();
+    {
+        match entry_result {
+            Ok(entry) if entry.file_type().is_some_and(|ft| ft.is_symlink()) => {}
+            Ok(entry) if entry.path().is_file() => {
+                if detect_language(entry.path()).is_some() {
+                    files.push(entry.path().to_path_buf());
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                walk_error_count += 1;
+                if walk_error_count <= 5 {
+                    result.errors.push(format!("walk error: {}", e));
+                }
+            }
+        }
+    }
+    if walk_error_count > 5 {
+        result
+            .errors
+            .push(format!("... and {} more walk errors", walk_error_count - 5));
+    }
 
     let conn = state.db.conn()?;
     let existing_files = db::get_indexed_files(&conn, project_id)?;
@@ -295,21 +370,17 @@ pub fn ingest_project_controlled(
     let mut import_sources: HashMap<String, Vec<String>> = HashMap::new();
     let mut changed_rels: Vec<String> = Vec::new();
     let mut changed_file_uids: Vec<String> = Vec::new();
-    let mut stale_file_uids: Vec<String> = Vec::new();
     let mut deleted_file_uids: Vec<String> = Vec::new();
     let mut changed_pfs: Vec<ParsedFile> = Vec::new();
-    let mut parse_error_rels: Vec<String> = Vec::new();
 
     for pf in parsed {
         current_rels.insert(pf.rel.clone());
         result.bytes_processed += pf.bytes;
 
         if let Some(e) = &pf.error {
+            // Transient per-file failure (#233): report it but leave the
+            // existing indexed_files row, chunks, vectors, and edges intact.
             result.errors.push(e.clone());
-            parse_error_rels.push(pf.rel.clone());
-            stale_file_uids.push(pf.file_uid.clone());
-            changed_file_uids.push(pf.file_uid.clone());
-            changed_pfs.push(pf);
             continue;
         }
 
@@ -356,15 +427,15 @@ pub fn ingest_project_controlled(
 
     let conn = state.db.conn()?;
     let mut stale_uids = Vec::new();
-    for rel in changed_rels.iter().chain(parse_error_rels.iter()) {
-        stale_uids.extend(db::code_uids_for_file(&conn, project_id, rel)?);
-    }
-    for rel in existing_files
+    // Only ingest-minted chunk uids (`{project}::{rel}::S-E`) go stale on a
+    // changed/deleted file (#527); user-created code-type memories that merely
+    stale_uids.extend(chunk_uids_for_rels(&conn, project_id, &changed_rels)?);
+    let stale_deleted_rels: Vec<String> = existing_files
         .keys()
         .filter(|rel| !current_rels.contains(*rel))
-    {
-        stale_uids.extend(db::code_uids_for_file(&conn, project_id, rel)?);
-    }
+        .cloned()
+        .collect();
+    stale_uids.extend(chunk_uids_for_rels(&conn, project_id, &stale_deleted_rels)?);
     drop(conn);
 
     pending_chunks.extend(changed_pfs.iter().flat_map(|pf| pf.chunks.iter()));
@@ -449,21 +520,19 @@ pub fn ingest_project_controlled(
             }
         }
     }
-
+    check_cancelled(state, operation_id)?;
     state.db.write(|tx| {
-        let now = chrono::Utc::now().timestamp_millis();
+      let now = chrono::Utc::now().timestamp_millis();
         for uid in &stale_uids {
             crate::persistence::queue_index_delete(tx, project_id, uid)?;
         }
         db::delete_memories_by_uids(tx, &stale_uids)?;
         db::delete_code_edges_for_files(tx, project_id, &changed_file_uids)?;
-        db::delete_code_edges_for_files(tx, project_id, &stale_file_uids)?;
         db::delete_code_edges_for_files(tx, project_id, &deleted_file_uids)?;
 
         for rel in existing_files
             .keys()
             .filter(|rel| !current_rels.contains(*rel))
-            .chain(parse_error_rels.iter())
         {
             db::delete_indexed_file(tx, project_id, rel)?;
         }
@@ -509,7 +578,7 @@ pub fn ingest_project_controlled(
                 let n = batch.len();
                 let placeholders = vec!["(?,?,?,?,?,?)"; n].join(",");
                 let sql = format!(
-                    "INSERT INTO code_edges(project_id, from_uid, to_uid, edge_type, weight, created_at) VALUES {placeholders}"
+                    "INSERT OR IGNORE INTO code_edges(project_id, from_uid, to_uid, edge_type, weight, created_at) VALUES {placeholders}"
                 );
                 let mut stmt = tx.prepare_cached(&sql)?;
                 let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(n * 6);
@@ -554,7 +623,6 @@ pub fn ingest_project_controlled(
         Ok(())
     })?;
 
-    check_cancelled(state, operation_id)?;
     emit_progress(
         state,
         project_id,
@@ -588,6 +656,59 @@ fn check_cancelled(state: &AppState, operation_id: Option<&str>) -> BiResult<()>
         }
     }
     Ok(())
+}
+
+/// Prune VCS-internal directories from walks (#230). `.hidden(false)` had
+/// disabled the walker's only dot-directory filter, so every ingest descended
+/// into `.git` object stores. Kept explicit so `.jj` gets parity even if the
+/// hidden filter is ever toggled again.
+fn is_vcs_meta_dir(entry: &ignore::DirEntry) -> bool {
+    entry.file_type().is_some_and(|ft| ft.is_dir())
+        && matches!(entry.file_name().to_str(), Some(".git") | Some(".jj"))
+}
+
+/// Collect only ingest-minted chunk UIDs for a file (`{project}::{rel}::S-E`),
+/// never user-created `code` memories that merely share the file_path (#527).
+/// Line-range validation for user remembers lives in memory::remember (#527).
+fn chunk_uids_for_rels(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    rels: &[String],
+) -> BiResult<Vec<String>> {
+    if rels.is_empty() {
+        return Ok(Vec::new());
+    }
+    const BATCH: usize = 50;
+    let mut out = Vec::new();
+    for group in rels.chunks(BATCH) {
+        let mut conditions = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+        params.push(project_id.to_string());
+        for rel in group {
+            let prefix = format!("{project_id}::{rel}::");
+            let pattern = format!(
+                "{}%",
+                prefix
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            );
+            conditions.push(format!("uid LIKE ?{} ESCAPE '\\'", params.len() + 1));
+            params.push(pattern);
+        }
+        let sql = format!(
+            "SELECT uid FROM memories WHERE project_id = ?1 AND mem_type = 'code' AND ({})",
+            conditions.join(" OR ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
 }
 
 /// Ingest multiple projects sequentially. Per-project parsing still uses a
@@ -635,6 +756,17 @@ pub fn ingest_multiple_projects(
 
 pub fn get_project_graph(state: &AppState, project_id: &str) -> BiResult<GraphData> {
     let conn = state.db.conn()?;
+    // Reconstruct rel paths against the stored project root (#231): chunks
+    // persist absolute file_path values, while edge/file UIDs are rel-based.
+    let project_root: String = conn
+        .query_row(
+            "SELECT root_path FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
 
@@ -683,7 +815,16 @@ pub fn get_project_graph(state: &AppState, project_id: &str) -> BiResult<GraphDa
     }
 
     for (file_path, members) in &by_file {
-        let file_uid = format!("{project_id}::file::{}", file_path.trim_start_matches('/'));
+        let rel = if project_root.is_empty() {
+            file_path.trim_start_matches('/').to_string()
+        } else {
+            Path::new(file_path)
+                .strip_prefix(&project_root)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_path.clone())
+        };
+        let file_uid = format!("{project_id}::file::{rel}");
         let short = file_path
             .rsplit('/')
             .next()
@@ -795,37 +936,34 @@ fn flush_chunk_insert(
     total_chunks: usize,
     now: i64,
 ) -> BiResult<()> {
-    // Collect uids first, deduped but in insertion order. The explicit
-    // DELETE below is required because `INSERT OR REPLACE` removes old rows
-    // without firing the memories_ad trigger (recursive_triggers is OFF),
-    // which would leave stale duplicate rows in memories_fts forever.
-    let mut uids: Vec<&str> = Vec::with_capacity(total_chunks);
     let mut seen = HashSet::new();
-    for pf in batch {
-        for c in &pf.chunks {
-            if seen.insert(c.uid.as_str()) {
-                uids.push(&c.uid);
-            }
-        }
-    }
-    for group in uids.chunks(500) {
-        let placeholders = vec!["?"; group.len()].join(",");
-        let sql = format!("DELETE FROM memories WHERE uid IN ({placeholders})");
-        tx.prepare_cached(&sql)?
-            .execute(rusqlite::params_from_iter(group.iter()))?;
-    }
     let placeholders = vec!["(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"; total_chunks].join(",");
     let sql = format!(
         "INSERT INTO memories
            (uid, project_id, mem_type, content, importance,
             created_at, updated_at, last_access, access_count,
             file_path, start_line, end_line, language, tags, source_agent)
-         VALUES {placeholders}"
+         VALUES {placeholders}
+         ON CONFLICT(uid) DO UPDATE SET
+           project_id = excluded.project_id,
+           mem_type = excluded.mem_type,
+           content = excluded.content,
+           importance = excluded.importance,
+           updated_at = excluded.updated_at,
+           file_path = excluded.file_path,
+           start_line = excluded.start_line,
+           end_line = excluded.end_line,
+           language = excluded.language,
+           tags = excluded.tags,
+           source_agent = excluded.source_agent"
     );
     let mut stmt = tx.prepare_cached(&sql)?;
     let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(total_chunks * 15);
     for pf in batch {
         for c in &pf.chunks {
+            if !seen.insert(c.uid.as_str()) {
+                continue;
+            }
             params.push(c.uid.clone().into());
             params.push(project_id.to_string().into());
             params.push("code".to_string().into());
@@ -854,7 +992,8 @@ fn flush_chunk_insert(
 
 fn detect_language(p: &Path) -> Option<&'static str> {
     let ext = p.extension()?.to_str()?;
-    Some(match ext {
+    let ext = ext.to_ascii_lowercase();
+    Some(match ext.as_str() {
         "rs" => "rust",
         "ts" | "tsx" => "typescript",
         "js" | "jsx" | "mjs" | "cjs" => "javascript",
@@ -875,7 +1014,7 @@ fn detect_language(p: &Path) -> Option<&'static str> {
         "dart" => "dart",
         "lua" => "lua",
         "scala" | "sc" => "scala",
-        "r" | "R" => "r",
+        "r" => "r",
         "ps1" | "psm1" => "powershell",
         _ => return None,
     })
@@ -949,8 +1088,21 @@ static LANG_BUNDLES: Lazy<HashMap<&'static str, LangBundle>> = Lazy::new(|| {
         let Ok(language) = language_for(name) else {
             continue;
         };
-        let chunk_query = chunk_query_src(name).and_then(|src| Query::new(&language, src).ok());
-        let import_query = import_query_src(name).and_then(|src| Query::new(&language, src).ok());
+        let chunk_query = chunk_query_src(name).and_then(|src| match Query::new(&language, src) {
+            Ok(q) => Some(q),
+            Err(e) => {
+                tracing::warn!("ingest: failed to compile chunk query for {name}: {e}");
+                None
+            }
+        });
+        let import_query =
+            import_query_src(name).and_then(|src| match Query::new(&language, src) {
+                Ok(q) => Some(q),
+                Err(e) => {
+                    tracing::warn!("ingest: failed to compile import query for {name}: {e}");
+                    None
+                }
+            });
         map.insert(
             name,
             LangBundle {
@@ -988,6 +1140,21 @@ fn parse_one_file(
         error: None,
     };
 
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_FILE_SIZE => {
+            pf.error = Some(format!(
+                "{}: file exceeds {} byte ingest limit",
+                path.display(),
+                MAX_FILE_SIZE
+            ));
+            return pf;
+        }
+        Err(e) => {
+            pf.error = Some(format!("{}: unreadable ({e})", path.display()));
+            return pf;
+        }
+        Ok(_) => {}
+    }
     let mut bytes = Vec::new();
     if std::fs::File::open(path)
         .and_then(|mut file| file.read_to_end(&mut bytes))
@@ -997,6 +1164,7 @@ fn parse_one_file(
         return pf;
     }
     let mut hasher = Sha256::new();
+    hasher.update(INDEXER_VERSION.as_bytes());
     hasher.update(&bytes);
     pf.file_hash = hex::encode(hasher.finalize());
     pf.bytes = bytes.len() as u64;
@@ -1031,13 +1199,11 @@ fn parse_one_file(
         return pf;
     };
     let root_node = tree.root_node();
-
     let chunks = collect_chunks(bundle, root_node, &source);
-    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let file_path_str = path.to_string_lossy().to_string();
     for chunk in chunks {
         // Include the end line: minified/bundled files routinely declare many
-        // functions on one physical line, so start_line alone collides (#562).
+        // functions on one physical line, so start_line-only UIDs collide (#232, #562).
         // collect_chunks dedupes exact (start, end) spans, making this unique.
         let uid = format!(
             "{project_id}::{}::{}-{}",
@@ -1053,9 +1219,7 @@ fn parse_one_file(
             file_uid: file_uid.clone(),
         });
     }
-
     pf.imports = collect_imports(bundle, root_node, &source);
-    let _ = file_name;
     pf
 }
 
@@ -1263,12 +1427,16 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
                 } else {
                     node
                 };
-                let start = node.start_position().row;
+                let start = node.start_position().row.min(lines.len().saturating_sub(1));
                 let end = end_node
                     .end_position()
                     .row
                     .min(start + 200)
-                    .min(lines.len() - 1);
+                    .min(lines.len() - 1)
+                    .max(start);
+                if start > end {
+                    continue;
+                }
                 let start_line = start + 1;
                 let end_line = end + 1;
                 if !seen_spans.insert((start_line, end_line)) {
@@ -1280,7 +1448,6 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
                     continue; // duplicate span from overlapping query patterns
                 }
                 let code = lines[start..=end].join("\n");
-                let _kind = node.kind().replace('_', " ");
                 chunks.push(Chunk {
                     code,
                     start_line,
@@ -1291,12 +1458,18 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
     }
 
     if chunks.is_empty() {
-        let cap = (lines.len() - 1).min(200);
-        chunks.push(Chunk {
-            code: lines[..=cap].join("\n"),
-            start_line: 1,
-            end_line: cap + 1,
-        });
+        // No chunk query matches (e.g. HTML): window the whole file into 200-line
+        // chunks so nothing is silently dropped (#246).
+        let mut start = 0;
+        while start < lines.len() {
+            let end = (start + 200).min(lines.len() - 1).max(start);
+            chunks.push(Chunk {
+                code: lines[start..=end].join("\n"),
+                start_line: start + 1,
+                end_line: end + 1,
+            });
+            start = end + 1;
+        }
     }
 
     chunks
@@ -1311,11 +1484,16 @@ fn import_query_src(lang: &str) -> Option<&'static str> {
             (extern_crate_declaration name: (identifier) @imp)
         "#
         }
+        // Limit call_expression captures to `require` so test/utility calls don't
+        // become bogus import edges (#238).
         "javascript" | "typescript" => {
             r#"
             (import_statement source: (string) @imp)
             (export_statement source: (string) @imp)
-            (call_expression function: (identifier) @fn arguments: (arguments (string) @imp))
+            (call_expression
+              function: (identifier) @fn
+              arguments: (arguments (string) @imp)
+              (#eq? @fn "require"))
         "#
         }
         "python" => {
@@ -1435,6 +1613,21 @@ fn collect_imports(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &st
                 if !txt.is_empty() {
                     imports.push(txt);
                 }
+            } else if node.kind() == "namespace_use_declaration" {
+                let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+                let cleaned = raw
+                    .strip_prefix("use")
+                    .unwrap_or(raw)
+                    .trim()
+                    .trim_end_matches(';')
+                    .split('\\')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !cleaned.is_empty() {
+                    imports.push(cleaned);
+                }
             }
         }
     }
@@ -1453,14 +1646,27 @@ fn resolve_import(
         .trim_start_matches("super::");
 
     if import.starts_with("./") || import.starts_with("../") || import.starts_with('/') {
-        let base = if import.starts_with('/') {
-            root.to_path_buf()
+        // Count leading '../' segments and pop that many components from the
+        // importing directory (#237); trim_start_matches('.') collapsed parent
+        // traversal and mis-resolved every ../ import.
+        let (base, rest) = if let Some(stripped) = import.strip_prefix('/') {
+            (root.to_path_buf(), stripped)
         } else {
-            from_file.parent()?.to_path_buf()
+            let mut ups = 0usize;
+            let mut remainder = import;
+            while let Some(tail) = remainder.strip_prefix("../") {
+                remainder = tail;
+                ups += 1;
+            }
+            let remainder = remainder.strip_prefix("./").unwrap_or(remainder);
+            let mut base = from_file.parent()?.to_path_buf();
+            for _ in 0..ups {
+                base = base.parent()?.to_path_buf();
+            }
+            (base, remainder)
         };
-        let candidate = base.join(import.trim_start_matches('.').trim_start_matches('/'));
-        let candidates = expand_candidates(&candidate);
-        for c in candidates {
+        let candidate = base.join(rest);
+        for c in expand_candidates(&candidate) {
             if c.exists() {
                 let rel = c.strip_prefix(root).ok()?.to_string_lossy().to_string();
                 return Some(rel);
@@ -1519,7 +1725,9 @@ fn build_structure_summary(root: &Path) -> BiResult<String> {
         .git_global(true)
         .git_exclude(true)
         .ignore(true)
-        .hidden(true)
+        .add_custom_ignore_filename(".biturboignore")
+        .hidden(false)
+        .filter_entry(is_vcs_meta_dir)
         .build()
         .filter_map(|r| r.ok())
     {
@@ -1576,15 +1784,9 @@ fn emit_progress(
     }
 }
 
-#[allow(dead_code)]
-fn _unused_hashset() -> HashSet<()> {
-    HashSet::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn parse_one_file_extracts_chunks_and_imports() {
         let dir =

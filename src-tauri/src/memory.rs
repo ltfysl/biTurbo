@@ -111,6 +111,25 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
     let mem_type = MemType::from_str(input.mem_type.as_deref().unwrap_or("fact"))?
         .as_str()
         .to_string();
+    // #527: user-supplied `code` memories must not carry arbitrary line
+    // ranges. Clamp negatives and enforce start <= end so ingest-side span
+    // arithmetic (`end - start + 1`) can never overflow on forged values.
+    let (start_line, end_line) = if mem_type == MemType::Code.as_str() {
+        match (input.start_line, input.end_line) {
+            (Some(s), Some(e)) => {
+                let s = s.max(1);
+                let e = e.max(s);
+                (Some(s), Some(e))
+            }
+            _ => {
+                return Err(BiError::Invalid(
+                    "mem_type 'code' requires both start_line and end_line".into(),
+                ))
+            }
+        }
+    } else {
+        (input.start_line, input.end_line)
+    };
     let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
     let uid = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
@@ -127,6 +146,15 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
                 .optional()?,
             None => None,
         };
+        // #442: if the caller asks to supersede a uid, the target must exist
+        // and not already be superseded; otherwise the write is silently lossy.
+        if let Some(old_uid) = input.supersedes.as_deref() {
+            if superseded.is_none() {
+                return Err(BiError::Invalid(format!(
+                    "supersedes uid '{old_uid}' does not exist or is already superseded"
+                )));
+            }
+        }
         let supersedes_id = superseded.as_ref().map(|(id, _)| *id);
         tx.execute(
             "INSERT INTO memories(uid, project_id, mem_type, content, tags, source_agent,
@@ -143,8 +171,8 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
                 importance,
                 now,
                 input.file_path,
-                input.start_line,
-                input.end_line,
+                start_line,
+                end_line,
                 input.language,
                 supersedes_id,
             ],
@@ -199,6 +227,17 @@ pub fn forget(state: &AppState, uid: &str) -> BiResult<bool> {
     let mem = get(state, uid)?.ok_or_else(|| BiError::NotFound(uid.into()))?;
     let now = chrono::Utc::now().timestamp_millis();
     state.db.write(|tx| {
+        let row_id: i64 = tx.query_row(
+            "SELECT id FROM memories WHERE uid = ?1",
+            rusqlite::params![uid],
+            |r| r.get(0),
+        )?;
+        // Clear any supersession pointers that pointed to the deleted row so
+        // the predecessor becomes visible again (#437).
+        tx.execute(
+            "UPDATE memories SET superseded_by = NULL WHERE superseded_by = ?1",
+            rusqlite::params![row_id],
+        )?;
         tx.execute(
             "DELETE FROM memories WHERE uid = ?1",
             rusqlite::params![uid],
@@ -223,18 +262,21 @@ pub fn update(state: &AppState, uid: &str, input: UpdateInput) -> BiResult<Memor
         .content
         .clone()
         .unwrap_or_else(|| existing.content.clone());
+    if new_content.trim().is_empty() {
+        return Err(BiError::Invalid("content is empty".into()));
+    }
     let new_type = match input.mem_type.clone() {
         Some(mem_type) => MemType::from_str(&mem_type)?.as_str().to_string(),
         None => existing.mem_type.clone(),
-    };
-    let new_tags_json = match input.tags.clone() {
-        Some(t) => serde_json::to_string(&t)?,
-        None => serde_json::to_string(&existing.tags)?,
     };
     let new_imp = input
         .importance
         .unwrap_or(existing.importance)
         .clamp(0.0, 1.0);
+    let new_tags_json = match input.tags.clone() {
+        Some(t) => serde_json::to_string(&t)?,
+        None => serde_json::to_string(&existing.tags)?,
+    };
 
     state.db.write(|tx| {
         tx.execute(
@@ -384,14 +426,17 @@ pub fn search(
     }
 
     // Second-stage reranking: boost scores based on term matches in content, tags, path, and language
-    let query_terms = tokenize_query(query);
+    // #439: search and explain share the same normalized terms so score
+    // boosting and matched_terms stay consistent.
+    let query_terms = crate::recall::normalized_terms(query);
     let mut reranked: Vec<MemoryWithScore> = ranked
         .into_iter()
         .filter_map(|(uid, base_score)| {
             by_uid.remove(&uid).map(|memory| {
+                let feedback = feedback_boosts.get(&uid).copied().unwrap_or(0.0);
                 let reranked_score =
                     crate::recall::apply_ranking_boost(base_score, &memory, &query_terms)
-                        + feedback_boosts.get(&uid).copied().unwrap_or(0.0);
+                        + base_score * feedback;
                 MemoryWithScore {
                     memory,
                     score: reranked_score,
@@ -420,17 +465,13 @@ pub(crate) fn fts_search(
     let kk_i64 = limit as i64;
     let or_query = sanitize_fts_query(query, FtsCombine::Or);
     if !or_query.is_empty() {
-        if let Ok(hits) = run_fts_query(conn, &or_query, project_id, mem_type, kk_i64) {
-            if !hits.is_empty() {
-                return Ok(hits);
-            }
-        }
+        // An AND query is a semantic subset of OR: when the OR pass matches
+        // nothing, AND cannot either. Errors are propagated, not swallowed
+        // (#448), so a broken FTS table surfaces instead of silently
+        // degrading recall.
+        return run_fts_query(conn, &or_query, project_id, mem_type, kk_i64);
     }
-    let and_query = sanitize_fts_query(query, FtsCombine::And);
-    if and_query.is_empty() {
-        return Ok(Vec::new());
-    }
-    run_fts_query(conn, &and_query, project_id, mem_type, kk_i64)
+    Ok(Vec::new())
 }
 
 fn run_fts_query(
@@ -476,7 +517,6 @@ fn run_fts_query(
 
 #[derive(Clone, Copy)]
 enum FtsCombine {
-    And,
     Or,
 }
 
@@ -494,7 +534,6 @@ fn sanitize_fts_query(q: &str, combine: FtsCombine) -> String {
         return String::new();
     }
     let sep = match combine {
-        FtsCombine::And => " ",
         FtsCombine::Or => " OR ",
     };
     tokens.join(sep)
@@ -541,12 +580,12 @@ pub fn count_by_type(state: &AppState, project_id: Option<&str>) -> BiResult<Vec
     let conn = state.db.conn()?;
     let (sql, p): (String, Vec<Box<dyn rusqlite::ToSql>>) = match project_id {
         Some(pid) => (
-            "SELECT mem_type, COUNT(*) FROM memories WHERE project_id = ?1 GROUP BY mem_type"
+            "SELECT mem_type, COUNT(*) FROM memories WHERE project_id = ?1 AND superseded_by IS NULL GROUP BY mem_type"
                 .to_string(),
             vec![Box::new(pid.to_string())],
         ),
         None => (
-            "SELECT mem_type, COUNT(*) FROM memories GROUP BY mem_type".to_string(),
+            "SELECT mem_type, COUNT(*) FROM memories WHERE superseded_by IS NULL GROUP BY mem_type".to_string(),
             vec![],
         ),
     };
@@ -584,15 +623,6 @@ pub fn list_tags(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(St
     let mut v: Vec<(String, i64)> = out.into_iter().collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     Ok(v)
-}
-
-/// Tokenize a query into normalized search terms.
-fn tokenize_query(query: &str) -> Vec<String> {
-    query
-        .split_whitespace()
-        .map(|t| t.to_lowercase())
-        .filter(|t| t.len() >= 2)
-        .collect()
 }
 
 /// Filter out common stopwords from query terms
@@ -820,6 +850,75 @@ mod search_tests {
         assert!(!index.contains_uid(&old.uid));
         assert!(index.contains_uid(&new.uid));
         assert_eq!(index.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn update_rejects_empty_content() {
+        let dir = std::env::temp_dir().join(format!(
+            "biturbo-update-empty-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let state = AppState::open(&dir).unwrap();
+        let mem = remember(
+            &state,
+            RememberInput {
+                content: "original".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let err = update(
+            &state,
+            &mem.uid,
+            UpdateInput {
+                content: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("content is empty"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn count_by_type_excludes_superseded() {
+        let dir = std::env::temp_dir().join(format!(
+            "biturbo-count-superseded-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let state = AppState::open(&dir).unwrap();
+        let old = remember(
+            &state,
+            RememberInput {
+                content: "old".into(),
+                mem_type: Some("fact".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        remember(
+            &state,
+            RememberInput {
+                content: "new".into(),
+                mem_type: Some("fact".into()),
+                supersedes: Some(old.uid),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let counts = count_by_type(&state, Some(&state.default_project_id)).unwrap();
+        let fact_count = counts
+            .iter()
+            .find(|(t, _)| t == "fact")
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        assert_eq!(fact_count, 1, "superseded fact should not be counted");
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -1,5 +1,5 @@
 // Creates a git tag matching the version in package.json and pushes it
-// to trigger the release workflow. Usage: pnpm release
+// to trigger the release workflow. Usage: npm run release
 //
 // Checks:
 //   - Working tree must be clean (no uncommitted changes)
@@ -47,21 +47,70 @@ if (localCommit !== remoteCommit) {
   process.exit(1);
 }
 
-// 3. Check if tag already exists
-let tagExists = false;
-try {
-  git(`rev-parse ${tag}`);
-  tagExists = true;
-} catch {
-  // Tag doesn't exist — good
+// 3. Enforce version sync across all four manifests — a mismatch ships a
+// release whose updater metadata disagrees with the app's self-reported version.
+function findVersionInSection(source, headerRegex) {
+  const lines = source.split(/\r?\n/);
+  let inSection = false;
+  for (let line of lines) {
+    const trimmed = line.trim();
+    if (headerRegex.test(trimmed)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection) {
+      if (/^\[/.test(trimmed)) break;
+      const m = trimmed.match(/^version\s*=\s*"([^"]+)"/);
+      if (m) return m[1];
+    }
+  }
+  return undefined;
 }
 
-if (tagExists) {
-  console.error(`Tag ${tag} already exists. Bump the version in package.json first.`);
+const cargoToml = readFileSync("src-tauri/Cargo.toml", "utf8");
+const cargoVersion = findVersionInSection(cargoToml, /^\[package\]$/);
+const tauriVersion = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+const cargoLock = readFileSync("src-tauri/Cargo.lock", "utf8");
+const lockVersion = findVersionInSection(cargoLock, /^name = "biturbo"$/);
+
+if (!cargoVersion || !lockVersion || !tauriVersion) {
+  console.error("Could not parse one of the version fields. Refusing to tag.");
   process.exit(1);
 }
 
-// 4. Create and push the tag
+const mismatches = [
+  ["package.json", version],
+  ["src-tauri/Cargo.toml", cargoVersion],
+  ["src-tauri/Cargo.lock (biturbo)", lockVersion],
+  ["src-tauri/tauri.conf.json", tauriVersion],
+].filter(([, v]) => v !== version);
+if (mismatches.length > 0) {
+  console.error(`Version mismatch across manifests. Sync these to ${version} first:`);
+  for (const [file, v] of mismatches) console.error(`  ${file}: ${v}`);
+  process.exit(1);
+}
+
+// 4. Check if tag already exists locally…
+let tagExists = false;
+ try {
+   git(`rev-parse ${tag}`);
+   tagExists = true;
+ } catch {
+   // Tag doesn't exist — good
+ }
+ 
+ if (tagExists) {
+   console.error(`Tag ${tag} already exists. Bump the version in package.json first.`);
+   process.exit(1);
+ }
+
+// …and on the remote.
+if (git(`ls-remote --tags origin refs/tags/${tag}`)) {
+  console.error(`Tag ${tag} already exists on the remote. Bump the version in package.json first.`);
+  process.exit(1);
+}
+
+// 5. Create and push the tag
 console.log(`Creating tag ${tag} for version ${version}...`);
 execSync(`git tag ${tag}`, { stdio: "inherit" });
 

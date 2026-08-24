@@ -1,7 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: ["class", ":root.light"],
   theme: {
     extend: {
       fontFamily: {
@@ -16,6 +15,8 @@ export default {
         bg: "rgb(var(--bg-rgb) / <alpha-value>)",
         surface: "rgb(var(--surface-rgb) / <alpha-value>)",
         "surface-2": "rgb(var(--surface-2-rgb) / <alpha-value>)",
+// (#530) surface-3 token for bg-surface-3 (e.g. Settings toggles).
+        "surface-3": "rgb(var(--surface-3-rgb) / <alpha-value>)",
         border: "rgb(var(--border-rgb) / <alpha-value>)",
         "border-subtle": "rgb(var(--border-rgb) / <alpha-value>)",
         text: "rgb(var(--text-rgb) / <alpha-value>)",

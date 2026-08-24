@@ -47,29 +47,44 @@ pub fn open_pool(db_path: &Path) -> BiResult<DbPool> {
 /// Upgrade the database before pooled connections are opened. A process-wide
 /// file lock prevents the GUI and MCP sidecar from racing through migrations.
 fn prepare_database(db_path: &Path) -> BiResult<()> {
-    let parent = db_path
-        .parent()
-        .ok_or_else(|| crate::error::BiError::Db("database has no parent directory".into()))?;
-    let lock_path = parent.join("biturbo.migrate.lock");
+    let parent = db_path.parent().ok_or_else(|| crate::error::BiError::Db {
+        message: "database has no parent directory".into(),
+        code: None,
+        extended: None,
+    })?;
+    let lock_path = db_path.with_extension("write.lock");
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(lock_path)?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+        .open(&lock_path)?;
+    fs4::fs_std::FileExt::lock_exclusive(&lock)?;
 
     let existed = db_path.exists() && std::fs::metadata(db_path).is_ok_and(|m| m.len() > 0);
     let mut conn = rusqlite::Connection::open(db_path)?;
+    // #460: hold the same process-level write lock and give SQLite a grace
+    // period so migration cannot race a concurrent Db::write transaction.
+    conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= CURRENT_SCHEMA_VERSION {
-        fs2::FileExt::unlock(&lock)?;
+    if version > CURRENT_SCHEMA_VERSION {
+        fs4::fs_std::FileExt::unlock(&lock)?;
+        return Err(crate::error::BiError::Db {
+            message: format!(
+                "database schema version {version} is newer than this build ({CURRENT_SCHEMA_VERSION}); open with a newer biTurbo"
+            ),
+            code: None,
+            extended: None,
+        });
+    }
+    if version == CURRENT_SCHEMA_VERSION {
+        fs4::fs_std::FileExt::unlock(&lock)?;
         return Ok(());
     }
 
     let stamp = chrono::Utc::now().timestamp_millis();
+    let backup_dir = parent.join("backups");
     let (backup, index_metadata_backup) = if existed {
-        let backup_dir = parent.join("backups");
         std::fs::create_dir_all(&backup_dir)?;
         let path = backup_dir.join(format!(
             "biturbo-pre-v{}-{}.db",
@@ -91,10 +106,14 @@ fn prepare_database(db_path: &Path) -> BiResult<()> {
             );
         }
         restore_index_metadata(&index_metadata_backup);
-        let _ = fs2::FileExt::unlock(&lock);
+        let _ = fs4::fs_std::FileExt::unlock(&lock);
         return Err(error);
     }
-    fs2::FileExt::unlock(&lock)?;
+
+    // #467: keep only the most recent pre-migration backups to avoid
+    // an unbounded pile of full database copies.
+    prune_old_backups(&backup_dir)?;
+    fs4::fs_std::FileExt::unlock(&lock)?;
     Ok(())
 }
 
@@ -133,6 +152,41 @@ fn restore_index_metadata(files: &[(PathBuf, PathBuf)]) {
         }
         let _ = std::fs::copy(backup, original);
     }
+}
+/// Keep only the most recent `KEEP` backup sets so migrations cannot consume
+/// unbounded disk. Best-effort deletion: a failure here must not abort startup.
+fn prune_old_backups(backup_dir: &Path) -> BiResult<()> {
+    const KEEP: usize = 5;
+    if !backup_dir.is_dir() {
+        return Ok(());
+    }
+    let mut entries: Vec<(PathBuf, u64)> = Vec::new();
+    for item in std::fs::read_dir(backup_dir)? {
+        let item = item?;
+        let path = item.path();
+        let mtime = item
+            .metadata()?
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if (name.starts_with("biturbo-pre-v") && name.ends_with(".db"))
+            || (path.is_dir() && name.starts_with("index-metadata-pre-v"))
+        {
+            entries.push((path, mtime));
+        }
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    for (path, _) in entries.iter().skip(KEEP) {
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 pub fn rebuild_fts_index(conn: &rusqlite::Connection) -> BiResult<usize> {
@@ -280,6 +334,10 @@ CREATE TABLE IF NOT EXISTS code_edges (
 CREATE INDEX IF NOT EXISTS idx_code_edges_project ON code_edges(project_id);
 CREATE INDEX IF NOT EXISTS idx_code_edges_from ON code_edges(from_uid);
 CREATE INDEX IF NOT EXISTS idx_code_edges_to ON code_edges(to_uid);
+-- Duplicate-edge guard (#236): interleaved ingests must not accumulate
+-- identical (project, from, to, type) rows; ingest inserts with OR IGNORE.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_code_edges_unique
+    ON code_edges(project_id, from_uid, to_uid, edge_type);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     uid UNINDEXED,
@@ -432,12 +490,12 @@ impl Db {
             .read(true)
             .write(true)
             .open(self.process_lock_path.as_ref())?;
-        fs2::FileExt::lock_exclusive(&process_lock)?;
+        fs4::fs_std::FileExt::lock_exclusive(&process_lock)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         let out = f(&tx)?;
         tx.commit()?;
-        fs2::FileExt::unlock(&process_lock)?;
+        fs4::fs_std::FileExt::unlock(&process_lock)?;
         Ok(out)
     }
 }

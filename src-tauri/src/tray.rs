@@ -112,13 +112,14 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     std::thread::Builder::new()
         .name("biturbo-tray-stats".into())
         .spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(30));
-
+            // Refresh immediately at startup, then every 30 seconds (#483).
             let (memories, projects, agents) = {
                 let Some(state) = app_handle.try_state::<AppState>() else {
+                    std::thread::sleep(Duration::from_secs(30));
                     continue;
                 };
                 let Ok(conn) = state.db.conn() else {
+                    std::thread::sleep(Duration::from_secs(30));
                     continue;
                 };
                 let memories: i64 = conn
@@ -142,6 +143,8 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
                     "biTurbo — {memories} memories · {projects} projects · {agents} agents"
                 )));
             }
+
+            std::thread::sleep(Duration::from_secs(30));
         })
         .ok();
 
@@ -171,15 +174,14 @@ fn hide_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
 
 fn toggle_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        match window.is_visible() {
-            Ok(true) => {
-                let _ = window.hide();
-            }
-            _ => {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if visible && focused {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
         }
     }
 }
