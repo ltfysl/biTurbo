@@ -1,4 +1,4 @@
-import { Plus, Sparkles, Sun, Moon, Loader2 } from "lucide-react";
+import { Plus, Sparkles, Sun, Moon, Monitor, Loader2 } from "lucide-react";
 import { useApp } from "../lib/store";
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -152,13 +152,20 @@ export function TopBar() {
       <span className="text-[10px] text-text-dim" title="Last consolidated">
         {consolidateStatus?.last_run_at ? timeAgo(consolidateStatus.last_run_at) : "—"}
       </span>
+      {/* (#264) TopBar theme toggle mirrors the current 'System' choice. */}
       <button
         onClick={toggleTheme}
         className="btn-ghost"
-        title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        title={`Switch theme (current: ${theme})`}
         aria-label="Toggle theme"
       >
-        {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+        {theme === "system" ? (
+          <Monitor size={14} />
+        ) : theme === "dark" ? (
+          <Sun size={14} />
+        ) : (
+          <Moon size={14} />
+        )}
       </button>
 
       <button

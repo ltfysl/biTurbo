@@ -625,8 +625,7 @@ Theme: ${theme}`;
                 } finally {
                   setUpdateInstalling(false);
                 }
-              }
-}
+              }}
               disabled={updateInstalling}
               className="btn-outline inline-flex items-center gap-1.5 text-xs border-accent/50 bg-accent-soft"
             >

@@ -1091,7 +1091,7 @@ static LANG_BUNDLES: Lazy<HashMap<&'static str, LangBundle>> = Lazy::new(|| {
         let chunk_query = chunk_query_src(name).and_then(|src| match Query::new(&language, src) {
             Ok(q) => Some(q),
             Err(e) => {
-                tracing::warn!("ingest: failed to compile chunk query for {name}: {e}");
+                tracing::warn!("ingest: failed to compile chunk query for {name}: {e}"); // (#250) log chunk-query failures instead of silently degrading.
                 None
             }
         });
@@ -1099,7 +1099,7 @@ static LANG_BUNDLES: Lazy<HashMap<&'static str, LangBundle>> = Lazy::new(|| {
             import_query_src(name).and_then(|src| match Query::new(&language, src) {
                 Ok(q) => Some(q),
                 Err(e) => {
-                    tracing::warn!("ingest: failed to compile import query for {name}: {e}");
+                    tracing::warn!("ingest: failed to compile import query for {name}: {e}"); // (#250) log import-query failures instead of silently degrading.
                     None
                 }
             });
