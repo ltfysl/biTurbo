@@ -664,8 +664,7 @@ fn is_vcs_meta_dir(entry: &ignore::DirEntry) -> bool {
 
 /// Collect only ingest-minted chunk UIDs for a file (`{project}::{rel}::S-E`),
 /// never user-created `code` memories that merely share the file_path (#527).
-/// NOTE: validating/clamping start_line/end_line on user remembers lives in
-/// memory::remember — TODO(other-slice).
+/// Line-range validation for user remembers lives in memory::remember (#527).
 fn chunk_uids_for_rels(
     conn: &rusqlite::Connection,
     project_id: &str,

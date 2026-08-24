@@ -202,6 +202,10 @@ impl ProjectIndex {
     }
 
     fn persist_now(&self) -> BiResult<bool> {
+        // Capture the mutation generation up front and only clear the dirty
+        // counter if it is unchanged after the write — a concurrent
+        // add()/add_batch() during serialization must keep its dirty bit
+        // so the just-added vectors are not lost on exit (#457).
         let dirty_gen = self.dirty.load(Ordering::Acquire);
         let tmp_index = self.file_path.with_extension("tvim.tmp");
         let (map, next_extid) = {

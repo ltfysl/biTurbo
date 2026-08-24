@@ -111,6 +111,25 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
     let mem_type = MemType::from_str(input.mem_type.as_deref().unwrap_or("fact"))?
         .as_str()
         .to_string();
+    // #527: user-supplied `code` memories must not carry arbitrary line
+    // ranges. Clamp negatives and enforce start <= end so ingest-side span
+    // arithmetic (`end - start + 1`) can never overflow on forged values.
+    let (start_line, end_line) = if mem_type == MemType::Code.as_str() {
+        match (input.start_line, input.end_line) {
+            (Some(s), Some(e)) => {
+                let s = s.max(1);
+                let e = e.max(s);
+                (Some(s), Some(e))
+            }
+            _ => {
+                return Err(BiError::Invalid(
+                    "mem_type 'code' requires both start_line and end_line".into(),
+                ))
+            }
+        }
+    } else {
+        (input.start_line, input.end_line)
+    };
     let importance = input.importance.unwrap_or(0.5).clamp(0.0, 1.0);
     let uid = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
@@ -152,8 +171,8 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
                 importance,
                 now,
                 input.file_path,
-                input.start_line,
-                input.end_line,
+                start_line,
+                end_line,
                 input.language,
                 supersedes_id,
             ],
