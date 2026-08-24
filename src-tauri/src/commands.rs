@@ -594,6 +594,22 @@ fn mcp_target_config_path(target: &str) -> BiResult<(std::path::PathBuf, &'stati
             (base.join("opencode.json"), "json-opencode")
         }
         "codex" => (home.join(".codex").join("config.toml"), "toml-codex"),
+        // Issue #390: VS Code (user profile) MCP install target.
+        "vscode" => {
+            let base = if cfg!(target_os = "macos") {
+                home.join("Library")
+                    .join("Application Support")
+                    .join("Code")
+                    .join("User")
+            } else if cfg!(target_os = "windows") {
+                let appdata =
+                    std::env::var("APPDATA").unwrap_or_else(|_| home.to_string_lossy().to_string());
+                std::path::PathBuf::from(appdata).join("Code").join("User")
+            } else {
+                home.join(".config").join("Code").join("User")
+            };
+            (base.join("mcp.json"), "json-cursor")
+        }
         other => {
             return Err(crate::error::BiError::Invalid(format!(
                 "unknown target: {other}"

@@ -1,3 +1,5 @@
+// Issue #386: event subscribers (webhooks / UDS) for memory/ingest/consolidate events.
+
 use crate::consolidate::{self, ConsolidateReport};
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
@@ -278,6 +280,9 @@ async fn run_once(state: Arc<AppState>, job: Option<ManualJob>) {
         }
         Err(e) => {
             tracing::warn!("consolidate run failed: {e}");
+            if let Some(app) = &state.app {
+                let _ = app.emit("consolidate:error", e.to_string());
+            }
         }
     }
 }

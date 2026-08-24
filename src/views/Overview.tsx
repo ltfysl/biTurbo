@@ -4,6 +4,7 @@ import { Heatmap } from "../components/Heatmap";
 import { Sparkles, Activity, Database, FolderGit2, Bot, ArrowUpRight } from "lucide-react";
 import { bytes, MEM_TYPE_META } from "../lib/format";
 import { useMemo } from "react";
+import { Kbd } from "../lib/kbd";
 
 export function Overview() {
   const stats = useApp((s) => s.stats);
@@ -62,7 +63,7 @@ export function Overview() {
         </p>
       </div>
 
-      {/* First-run onboarding */}
+      {/* (#361) First-run onboarding: static 3-step hints; add persistence, resume, and demo recall. */}
       {projects.length === 0 && agents.length === 0 && (
         <div className="card border-accent/30 p-6">
           <h3 className="font-serif text-lg">Set up biTurbo in three steps</h3>
@@ -93,7 +94,7 @@ export function Overview() {
         </div>
       )}
 
-      {/* Stats row */}
+      {/* (#396) Usage insights: basic stats/heatmap; add per-agent trends, recall hit-rate, dead-memory prune. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard
           icon={Database}
@@ -173,7 +174,7 @@ export function Overview() {
           </div>
         </div>
 
-        {/* Heatmap */}
+        {/* (#358) Activity feed: heatmap over 12 weeks; dedicated filtered event list and live tail pending. */}
         <div className="card p-5">
           <div className="mb-4 flex items-baseline justify-between">
             <h3 className="font-serif text-lg">Activity · 12 weeks</h3>
@@ -214,7 +215,7 @@ export function Overview() {
             <Sparkles className="mb-2 text-text-dim" size={20} />
             <div className="text-sm text-text-muted">No memories in this project yet.</div>
             <div className="mt-1 text-xs text-text-dim">
-              Press <span className="kbd">⌘K</span> to remember something.
+              Press <Kbd combo="mod+K" /> to remember something.
             </div>
           </div>
         ) : (

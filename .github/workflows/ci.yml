@@ -84,9 +84,9 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
         env:
-  # (#563) Cache embedding models and force CPU EP to keep Ubuntu CI tests stable.
+  # (#563) Cache embedding models and force CPU EP; single thread to avoid ONNX runtime contention.
           BITURBO_EMBED_EP: cpu
 
   mcp-smoke:

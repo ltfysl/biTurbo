@@ -1,4 +1,6 @@
 //! Transport-neutral application interface shared by Tauri and MCP adapters.
+// Issue #396: add local activity/recall insights and dead-memory pruning.
+// Issue #385: agent roles (admin/writer/reader) and first-time approval flow.
 
 use crate::error::{BiError, BiResult};
 use crate::memory;

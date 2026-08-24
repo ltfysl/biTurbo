@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { X, Plus } from "lucide-react";
 import clsx from "clsx";
 import { friendlyError } from "../lib/format";
+import { Kbd } from "../lib/kbd";
 
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
 
@@ -17,6 +18,7 @@ export function QuickAdd() {
   const projects = useApp((s) => s.projects);
   const knownTags = useApp((s) => s.tags);
 
+  // (#355) QuickAdd parity: code type + file path/start line; language/end_line/supersedes picker and file dialog pending.
   const [content, setContent] = useState("");
   const [type, setType] = useState<(typeof TYPES)[number]>("fact");
   const [tags, setTags] = useState("");
@@ -134,7 +136,7 @@ export function QuickAdd() {
         <div className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           <div id="quickadd-title" className="flex items-center gap-2 font-serif text-lg">
             <span>Remember</span>
-            <span className="font-mono text-[10px] text-text-dim">⌘K</span>
+            <Kbd combo="mod+K" className="text-[10px] text-text-dim" />
           </div>
           <button onClick={() => setOpen(false)} className="btn-ghost p-1.5" aria-label="Close" title="Close">
             <X size={14} />
@@ -239,7 +241,7 @@ export function QuickAdd() {
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <span className="kbd">⌘⏎</span>
+            <Kbd combo="mod+return" />
             <button
               onClick={submit}
               disabled={!content.trim() || busy}

@@ -9,6 +9,9 @@ use tauri::{
     Manager, Runtime,
 };
 
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_updater::UpdaterExt;
+
 use crate::state::AppState;
 
 const TRAY_ID: &str = "main-tray";
@@ -20,14 +23,25 @@ const MENU_OPEN_DATA: &str = "tray_open_data";
 const MENU_STATS_MEMORIES: &str = "tray_stats_memories";
 const MENU_STATS_PROJECTS: &str = "tray_stats_projects";
 const MENU_STATS_AGENTS: &str = "tray_stats_agents";
+const MENU_VERSION: &str = "tray_version";
+const MENU_CHECK_UPDATES: &str = "tray_check_updates";
 
-pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+pub fn setup(app: &tauri::App<tauri::Wry>) -> tauri::Result<()> {
     // — Stats (disabled info items, updated by background thread) —
     let stat_memories =
         MenuItem::with_id(app, MENU_STATS_MEMORIES, "Memories: —", false, None::<&str>)?;
     let stat_projects =
         MenuItem::with_id(app, MENU_STATS_PROJECTS, "Projects: —", false, None::<&str>)?;
     let stat_agents = MenuItem::with_id(app, MENU_STATS_AGENTS, "Agents: —", false, None::<&str>)?;
+    let version_label = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let version = MenuItem::with_id(app, MENU_VERSION, &version_label, false, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        MENU_CHECK_UPDATES,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
 
     let sep1 = PredefinedMenuItem::separator(app)?;
 
@@ -60,6 +74,8 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
             &consolidate,
             &open_data,
             &sep3,
+            &version,
+            &check_updates,
             &quit,
         ],
     )?;
@@ -69,7 +85,7 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         .cloned()
         .ok_or_else(|| tauri::Error::FailedToReceiveMessage)?;
 
-    let _tray = TrayIconBuilder::with_id(TRAY_ID)
+    let _tray = TrayIconBuilder::<tauri::Wry>::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
         .tooltip("biTurbo")
@@ -87,7 +103,88 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
                     open_data_folder(&state.data_dir);
                 }
             }
-            MENU_QUIT => app.exit(0),
+            MENU_VERSION => { /* disabled info item */ }
+            MENU_CHECK_UPDATES => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let res = async {
+                        let updater = app.updater().map_err(|e| e.to_string())?;
+                        let update = updater.check().await.map_err(|e| e.to_string())?;
+                        Ok::<_, String>(update)
+                    }
+                    .await;
+
+                    match res {
+                        Ok(Some(update)) => {
+                            let version = update.version.clone();
+                            let install_app = app.clone();
+                            app.dialog()
+                                .message(format!("biTurbo {} is available. Install now?", version))
+                                .buttons(MessageDialogButtons::YesNo)
+                                .show(move |ok| {
+                                    if ok {
+                                        tauri::async_runtime::spawn(async move {
+                                            let _ = async {
+                                                let updater = install_app
+                                                    .updater()
+                                                    .map_err(|e| e.to_string())?;
+                                                let update = updater
+                                                    .check()
+                                                    .await
+                                                    .map_err(|e| e.to_string())?;
+                                                if let Some(update) = update {
+                                                    update
+                                                        .download_and_install(
+                                                            |_event, _progress| {},
+                                                            || {},
+                                                        )
+                                                        .await
+                                                        .map_err(|e| e.to_string())?;
+                                                    install_app.restart();
+                                                }
+                                                Ok::<_, String>(())
+                                            }
+                                            .await;
+                                        });
+                                    }
+                                });
+                        }
+                        Ok(None) => {
+                            app.dialog()
+                                .message("biTurbo is up to date.")
+                                .buttons(MessageDialogButtons::Ok)
+                                .show(|_| {});
+                        }
+                        Err(e) => {
+                            app.dialog()
+                                .message(format!("Update check failed: {e}"))
+                                .buttons(MessageDialogButtons::Ok)
+                                .show(|_| {});
+                        }
+                    }
+                });
+            }
+            MENU_QUIT => {
+                let app = app.clone();
+                let active = app
+                    .try_state::<AppState>()
+                    .and_then(|s| crate::operations::list(s.inner(), 100).ok())
+                    .map(|ops| ops.iter().any(|o| o.status == "running"))
+                    .unwrap_or(false);
+                if active {
+                    let confirm_app = app.clone();
+                    app.dialog()
+                        .message("A background job is running. Quit anyway?")
+                        .buttons(MessageDialogButtons::YesNo)
+                        .show(move |ok| {
+                            if ok {
+                                confirm_app.exit(0);
+                            }
+                        });
+                } else {
+                    app.exit(0);
+                }
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -112,14 +209,16 @@ pub fn setup<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     std::thread::Builder::new()
         .name("biturbo-tray-stats".into())
         .spawn(move || loop {
-            // Refresh immediately at startup, then every 30 seconds (#483).
+            // Poll immediately each iteration; if the app state is not yet
+            // available after launch, retry in 1 s so the menu does not stay
+            // on "—" for the full 30 s interval (#111).
             let (memories, projects, agents) = {
                 let Some(state) = app_handle.try_state::<AppState>() else {
-                    std::thread::sleep(Duration::from_secs(30));
+                    std::thread::sleep(Duration::from_secs(1));
                     continue;
                 };
                 let Ok(conn) = state.db.conn() else {
-                    std::thread::sleep(Duration::from_secs(30));
+                    std::thread::sleep(Duration::from_secs(1));
                     continue;
                 };
                 let memories: i64 = conn

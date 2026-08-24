@@ -8,6 +8,8 @@
 //! activity  — append-only audit log of writes/reads
 //! code_index — tree-sitter chunks per project (file:range → memory)
 
+// Issue #380: scheduled pruning of activity, recall_events, feedback, operations, applied mutations.
+
 use crate::error::BiResult;
 use parking_lot::Mutex;
 use r2d2::Pool;

@@ -7,7 +7,9 @@ import type {
   ActivityEntry,
   GraphData,
   IngestProgress,
+  MultiIngestDone,
 } from "./types";
+
 import { api } from "./api";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ConfirmOptions } from "../components/ConfirmModal";
@@ -88,8 +90,6 @@ interface AppStore {
   /** project_id → backend job id, captured at ingest start for cancellation. */
   ingestJobIds: Record<string, string>;
   registerIngestJob: (project_id: string, job_id: string) => void;
-  startIngest: (project_id: string, root_path: string) => Promise<string>;
-  cancelIngest: (job_id: string) => Promise<void>;
 
   bootstrapLoaded: boolean;
   bootstrapOnce: () => Promise<void>;
@@ -271,30 +271,6 @@ export const useApp = create<AppStore>((set, get) => ({
   ingestJobIds: {},
   registerIngestJob: (project_id, job_id) =>
     set((s) => ({ ingestJobIds: { ...s.ingestJobIds, [project_id]: job_id } })),
-  startIngest: async (project_id, root_path) => {
-    const job = await api.startIngest(project_id, root_path);
-    set((s) => ({
-      ingestJobs: {
-        ...s.ingestJobs,
-        [job.id]: {
-          project_id,
-          phase: "queued",
-          current: 0,
-          total: 1,
-          file: null,
-          chunks_so_far: 0,
-        },
-      },
-    }));
-    return job.id;
-  },
-  cancelIngest: async (job_id) => {
-    await api.cancelOperation(job_id);
-    set((s) => {
-      const { [job_id]: _, ...rest } = s.ingestJobs;
-      return { ingestJobs: rest };
-    });
-  },
 
   bootstrapLoaded: false,
   bootstrapOnce: async () => {
@@ -418,6 +394,18 @@ if (typeof window !== "undefined") {
         if (useApp.getState().currentProjectId === d.project_id) {
           void useApp.getState().refreshGraph();
         }
+      }),
+    );
+    unlistens.push(
+      await listen<MultiIngestDone>("multi-ingest:done", (e) => {
+        const d = e.payload;
+        useApp.getState().showToast({
+          kind: "ok",
+          text: `Indexed ${d.total_files_indexed} projects · ${d.total_chunks_indexed} chunks · ${Math.round(d.elapsed_ms / 100) / 10}s`,
+        });
+        void useApp.getState().refreshStats();
+        void useApp.getState().refreshProjects();
+        void useApp.getState().refreshActivity();
       }),
     );
     unlistens.push(

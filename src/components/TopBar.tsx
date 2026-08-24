@@ -3,9 +3,11 @@ import { useApp } from "../lib/store";
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
-import { ingestPhaseLabel } from "../lib/format";
-import type { ConsolidateReport } from "../lib/types";
+import { ingestPhaseLabel, timeAgo } from "../lib/format";
+import type { ConsolidateReport, ConsolidateStatus } from "../lib/types";
 import { friendlyError } from "../lib/format";
+import { Kbd } from "../lib/kbd";
+
 
 export function TopBar() {
   const setQuickAddOpen = useApp((s) => s.setQuickAddOpen);
@@ -19,17 +21,22 @@ export function TopBar() {
   const theme = useApp((s) => s.theme);
   const toggleTheme = useApp((s) => s.toggleTheme);
   const [consolidating, setConsolidating] = useState(false);
+  const [consolidateStatus, setConsolidateStatus] = useState<ConsolidateStatus | null>(null);
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
   const ingestJobs = useApp((s) => s.ingestJobs);
   const activeIngests = Object.values(ingestJobs).filter(
     (j) => j.phase !== "done"
   );
-
   useEffect(() => {
     const unlistenP = listen<ConsolidateReport>("consolidate:done", (e) => {
       const r = e.payload;
       setConsolidating(false);
+      setConsolidateStatus((s) =>
+        s
+          ? { ...s, running: false, last_run_at: Date.now(), last_report: r }
+          : ({ running: false, last_run_at: Date.now(), last_report: r } as ConsolidateStatus)
+      );
       showToast({
         kind: "ok",
         text: `Consolidated · ${r.decayed} decayed · ${r.merged} merged · ${r.duplicates_found} dupes`,
@@ -41,6 +48,33 @@ export function TopBar() {
       void unlistenP.then((fn) => fn());
     };
   }, [showToast, refreshStats, refreshActivity]);
+
+  useEffect(() => {
+    const unlistenP = listen<string>("consolidate:error", (e) => {
+      setConsolidating(false);
+      setConsolidateStatus((s) => (s ? { ...s, running: false } : s));
+      showToast({ kind: "err", text: e.payload });
+    });
+    return () => {
+      void unlistenP.then((fn) => fn());
+    };
+  }, [showToast]);
+
+
+  useEffect(() => {
+    void api.consolidateStatus().then(setConsolidateStatus);
+  }, []);
+
+  useEffect(() => {
+    if (!consolidating) return;
+    const tick = () => {
+      void api.consolidateStatus().then(setConsolidateStatus);
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [consolidating]);
+
 
   async function runConsolidate() {
     setConsolidating(true);
@@ -113,7 +147,9 @@ export function TopBar() {
         <Sparkles size={14} className={consolidating ? "animate-pulse" : ""} />
         <span className="hidden sm:inline">Consolidate</span>
       </button>
-
+      <span className="text-[10px] text-text-dim" title="Last consolidated">
+        {consolidateStatus?.last_run_at ? timeAgo(consolidateStatus.last_run_at) : "—"}
+      </span>
       <button
         onClick={toggleTheme}
         className="btn-ghost"
@@ -126,11 +162,11 @@ export function TopBar() {
       <button
         onClick={() => setQuickAddOpen(true)}
         className="btn-primary"
-        title="Quick add (⌘K)"
+        title="Quick add (mod+K)"
       >
         <Plus size={14} />
         <span>Remember</span>
-        <span className="kbd ml-1">⌘K</span>
+        <Kbd combo="mod+K" className="ml-1" />
       </button>
     </header>
   );

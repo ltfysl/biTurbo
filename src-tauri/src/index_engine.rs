@@ -1,3 +1,5 @@
+// Issue #382: index persist uses snapshot-under-lock + generation counter (already implemented).
+
 use crate::error::{BiError, BiResult};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
