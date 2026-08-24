@@ -1596,6 +1596,21 @@ fn collect_imports(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &st
                 if !txt.is_empty() {
                     imports.push(txt);
                 }
+            } else if node.kind() == "namespace_use_declaration" {
+                let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
+                let cleaned = raw
+                    .strip_prefix("use")
+                    .unwrap_or(raw)
+                    .trim()
+                    .trim_end_matches(';')
+                    .split('\\')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !cleaned.is_empty() {
+                    imports.push(cleaned);
+                }
             }
         }
     }
