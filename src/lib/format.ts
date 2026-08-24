@@ -85,7 +85,7 @@ export function truncatePath(path: string, maxLen = 40): string {
     result = next;
   }
   if (result === path) return result;
-  let out = "…/" + result;
+  const out = "…/" + result;
   if (out.length <= maxLen) return out;
   // The remaining result (often the filename alone) is still too long.
   // Truncate the final segment while preserving an extension if present.
