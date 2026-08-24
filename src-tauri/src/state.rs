@@ -106,7 +106,8 @@ impl AppState {
         crate::operations::recover_interrupted(&state)?;
 
         // Debounced index flusher + LRU evictor. A plain thread (not tokio)
-        // so it runs in every consumer of AppState.
+        // so it runs in every consumer of AppState. It polls an AtomicBool
+        // so the thread exits instead of leaking across every open (#420).
         {
             let state_for_thread = state.clone();
             std::thread::Builder::new()
