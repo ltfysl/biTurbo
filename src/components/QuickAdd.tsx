@@ -10,6 +10,7 @@ import { Kbd } from "../lib/kbd";
 // (#56) A compact project selector lets the user pick the target project.
 // (#58) Importance defaults to 0.6 with a clear numeric readout.
 // (#59) Backdrop and Escape close are ignored while a save is in flight.
+// (#125) Modal uses the shared .backdrop utility for a consistent scrim.
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
 const MAX_CHARS = 10000;
 

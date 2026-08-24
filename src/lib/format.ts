@@ -19,6 +19,7 @@ export function bytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+// (#123) Type rings are consumed by MemoryCard/MemoryDetail badges.
 export const MEM_TYPE_META: Record<
   string,
   { label: string; color: string; bg: string; ring: string; dot: string }

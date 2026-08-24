@@ -210,6 +210,7 @@
 
   /* Keyboard focus indicator — visible only for keyboard navigation
      (:focus-visible), so mouse clicks don't show outlines. */
+  /* (#127) Visible keyboard focus indicator. */
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
@@ -329,12 +330,13 @@
   .shadow-modal {
     box-shadow: var(--shadow-modal);
   }
+  /* (#125) Shared .backdrop uses the theme --backdrop token. */
   .backdrop {
     background-color: var(--backdrop);
   }
 }
 
-/* Respect OS reduced-motion preference (#7). */
+/* Respect OS reduced-motion preference (#7, #128). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -89,6 +89,7 @@ export const MemoryCard = memo(function MemoryCard({
       onContextMenu={handleContext}
       className={clsx("memory-card", active && "active")}>
 
+        {/* (#123) Type badge applies ring, bg, and color from MEM_TYPE_META. */}
       <div className="mb-2 flex items-center gap-2">
         <span
           className={clsx(

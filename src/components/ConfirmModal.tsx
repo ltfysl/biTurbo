@@ -33,6 +33,7 @@ export function ConfirmModalHost() {
   ) : null;
 }
 
+// (#125) Modal uses the shared .backdrop utility for a consistent scrim.
 function ConfirmModal({
   opts,
   onResolve,
