@@ -1191,9 +1191,7 @@ fn parse_one_file(
         return pf;
     };
     let root_node = tree.root_node();
-
     let chunks = collect_chunks(bundle, root_node, &source);
-    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let file_path_str = path.to_string_lossy().to_string();
     for chunk in chunks {
         // Include the end line: minified/bundled files routinely declare many
@@ -1213,9 +1211,7 @@ fn parse_one_file(
             file_uid: file_uid.clone(),
         });
     }
-
     pf.imports = collect_imports(bundle, root_node, &source);
-    let _ = file_name;
     pf
 }
 
@@ -1444,7 +1440,6 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
                     continue; // duplicate span from overlapping query patterns
                 }
                 let code = lines[start..=end].join("\n");
-                let _kind = node.kind().replace('_', " ");
                 chunks.push(Chunk {
                     code,
                     start_line,
@@ -1781,15 +1776,10 @@ fn emit_progress(
     }
 }
 
-#[allow(dead_code)]
-fn _unused_hashset() -> HashSet<()> {
-    HashSet::new()
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn parse_one_file_extracts_chunks_and_imports() {
         let dir =
