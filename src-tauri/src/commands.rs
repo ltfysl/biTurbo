@@ -257,7 +257,7 @@ pub fn consolidate_now(
 ) -> BiResult<ConsolidateStatus> {
     crate::operations::start_consolidate(state.inner(), project_id.as_deref())?;
     // Report the scheduler's real queue state instead of fabricating
-    // queued=true — a concurrent run makes this a no-op enqueue (#426).
+    // queued=true — a concurrent run makes this a no-op enqueue (#426, #430).
     Ok(crate::scheduler::get_status())
 }
 
@@ -373,7 +373,7 @@ pub fn set_watch(state: State<'_, AppState>, args: WatchArgs) -> BiResult<crate:
                 })?)
             };
         // Same existence gate as the ingest commands so a typo cannot arm a
-        // watcher over a path that will silently ingest nothing (#422).
+        // watcher over a path that will silently ingest nothing (#422, #432).
         if !root.is_dir() {
             return Err(crate::error::BiError::Invalid(format!(
                 "root_path '{}' does not exist on disk",

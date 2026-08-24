@@ -192,6 +192,7 @@ pub(crate) fn ranking_boosts(memory: &memory::Memory, terms: &[String]) -> Ranki
         .iter()
         .filter(|term| content.contains(term.as_str()))
         .count();
+    // Require word-boundary or equality tag matches; ignore very short tags (#440).
     let tag_matches = terms
         .iter()
         .filter(|term| {

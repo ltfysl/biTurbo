@@ -211,6 +211,8 @@ pub fn forget(state: &AppState, uid: &str) -> BiResult<bool> {
             rusqlite::params![uid],
             |r| r.get(0),
         )?;
+        // Clear any supersession pointers that pointed to the deleted row so
+        // the predecessor becomes visible again (#437).
         tx.execute(
             "UPDATE memories SET superseded_by = NULL WHERE superseded_by = ?1",
             rusqlite::params![row_id],

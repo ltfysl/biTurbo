@@ -641,6 +641,7 @@ fn execute_multi_ingest(
 ) -> BiResult<crate::ingest::MultiIngestResult> {
     let _operation_lock = lock_operation(state, id)?;
     mark_running(state, id)?;
+    // Capture real elapsed time for the multi-ingest:done event (#424).
     let started = std::time::Instant::now();
     let mut combined = crate::ingest::MultiIngestResult::default();
     let total = projects.len();
@@ -660,6 +661,7 @@ fn execute_multi_ingest(
                 combined.results.push(result);
             }
             Err(error) => {
+                // Distinguish a genuine ingest failure from a user cancellation (#428).
                 if is_cancel_requested(state, id).unwrap_or(false) {
                     mark_cancelled(state, id)?;
                 } else {
@@ -953,6 +955,7 @@ fn execute_ingest(
             Ok(result)
         }
         Err(error) => {
+            // Distinguish a genuine ingest failure from a user cancellation (#428).
             let cancelled = is_cancel_requested(state, id).unwrap_or(false);
             if cancelled {
                 mark_cancelled(state, id)?;
