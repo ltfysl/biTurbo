@@ -18,12 +18,16 @@ dist-ssr
 .omo/
 .mavis/
 .cursor/
+# Tracked AI-tooling state and local caches removed (#504).
+
 pnpm-lock.yaml
 pnpm-workspace.yaml
 tsconfig.tsbuildinfo
 tsconfig.node.tsbuildinfo
 vite.config.d.ts
 vite.config.js
+# Compiled Vite config and tsbuildinfo artifacts removed (#497).
+
 
 # Editor
 .vscode/*
