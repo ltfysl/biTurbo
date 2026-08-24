@@ -17,6 +17,7 @@ export function findBinary(): string {
   const explicit = arg("bin");
   if (explicit) return explicit;
   const ext = process.platform === "win32" ? ".exe" : "";
+// (#538) Cross-platform debug/release binary discovery (replaces the Windows-only .exe default).
   const candidates = [
     resolve(process.cwd(), `src-tauri/target/debug/biturbo-mcp${ext}`),
     resolve(process.cwd(), `src-tauri/target/release/biturbo-mcp${ext}`),
