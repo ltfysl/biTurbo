@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { ingestPhaseLabel } from "../lib/format";
 import type { ConsolidateReport } from "../lib/types";
 import { friendlyError } from "../lib/format";
+import { Kbd } from "../lib/kbd";
 
 export function TopBar() {
   const setQuickAddOpen = useApp((s) => s.setQuickAddOpen);
@@ -126,11 +127,11 @@ export function TopBar() {
       <button
         onClick={() => setQuickAddOpen(true)}
         className="btn-primary"
-        title="Quick add (⌘K)"
+        title="Quick add (mod+K)"
       >
         <Plus size={14} />
         <span>Remember</span>
-        <span className="kbd ml-1">⌘K</span>
+        <Kbd combo="mod+K" className="ml-1" />
       </button>
     </header>
   );

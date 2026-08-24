@@ -8,6 +8,7 @@ import type { ContextMenuItem } from "../components/ContextMenu";
 import type { ExplainedMemory, RecallExplanation } from "../lib/types";
 import clsx from "clsx";
 import { friendlyError } from "../lib/format";
+import { Kbd } from "../lib/kbd";
 
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
 const SEARCH_DEBOUNCE_MS = 180;
@@ -400,7 +401,7 @@ export function Memories() {
               <FileCode2 size={24} className="mb-2 opacity-50" />
               <div className="text-sm">No memories in this project yet.</div>
               <div className="mt-1 text-xs">
-                Press <span className="kbd">⌘K</span> to add one.
+                Press <Kbd combo="mod+K" /> to add one.
               </div>
             </div>
           ) : (

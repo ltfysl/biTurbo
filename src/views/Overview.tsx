@@ -4,6 +4,7 @@ import { Heatmap } from "../components/Heatmap";
 import { Sparkles, Activity, Database, FolderGit2, Bot, ArrowUpRight } from "lucide-react";
 import { bytes, MEM_TYPE_META } from "../lib/format";
 import { useMemo } from "react";
+import { Kbd } from "../lib/kbd";
 
 export function Overview() {
   const stats = useApp((s) => s.stats);
@@ -214,7 +215,7 @@ export function Overview() {
             <Sparkles className="mb-2 text-text-dim" size={20} />
             <div className="text-sm text-text-muted">No memories in this project yet.</div>
             <div className="mt-1 text-xs text-text-dim">
-              Press <span className="kbd">⌘K</span> to remember something.
+              Press <Kbd combo="mod+K" /> to remember something.
             </div>
           </div>
         ) : (
