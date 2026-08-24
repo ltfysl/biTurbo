@@ -119,38 +119,41 @@ fn apply_decay(state: &AppState, project_id: Option<&str>) -> BiResult<usize> {
             }
         };
         let mut stmt = tx.prepare(select_sql)?;
-        let map_row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(String, f64, Option<f64>, i64, i64, i64)> {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, f64>(1)?,
-                r.get::<_, Option<f64>>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, i64>(5)?,
-            ))
-        };
+        let map_row =
+            |r: &rusqlite::Row<'_>| -> rusqlite::Result<(String, f64, Option<f64>, i64, i64, i64)> {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, Option<f64>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            };
         let rows: Vec<(String, f32)> = match project_id {
             Some(p) => stmt
                 .query_map(rusqlite::params![p], map_row)?
                 .filter_map(|r| r.ok())
-                .filter_map(|(uid, importance, decay_base, created_at, access_count, last_access)| {
-                    let base = decay_base.unwrap_or(importance);
-                    let new_imp =
-                        decayed_importance(base, created_at, now, access_count, last_access);
-                    ((new_imp - importance as f32).abs() > 0.001)
-                        .then_some((uid, new_imp))
-                })
+                .filter_map(
+                    |(uid, importance, decay_base, created_at, access_count, last_access)| {
+                        let base = decay_base.unwrap_or(importance);
+                        let new_imp =
+                            decayed_importance(base, created_at, now, access_count, last_access);
+                        ((new_imp - importance as f32).abs() > 0.001).then_some((uid, new_imp))
+                    },
+                )
                 .collect(),
             None => stmt
                 .query_map([], map_row)?
                 .filter_map(|r| r.ok())
-                .filter_map(|(uid, importance, decay_base, created_at, access_count, last_access)| {
-                    let base = decay_base.unwrap_or(importance);
-                    let new_imp =
-                        decayed_importance(base, created_at, now, access_count, last_access);
-                    ((new_imp - importance as f32).abs() > 0.001)
-                        .then_some((uid, new_imp))
-                })
+                .filter_map(
+                    |(uid, importance, decay_base, created_at, access_count, last_access)| {
+                        let base = decay_base.unwrap_or(importance);
+                        let new_imp =
+                            decayed_importance(base, created_at, now, access_count, last_access);
+                        ((new_imp - importance as f32).abs() > 0.001).then_some((uid, new_imp))
+                    },
+                )
                 .collect(),
         };
         drop(stmt);
@@ -210,14 +213,14 @@ fn find_duplicates(
         // deduplicating code chunks is expensive and rarely useful.
         let idx = state.get_or_load_index(&pid)?;
         let mut offset = 0usize;
-    const BATCH: usize = 1000;
-    loop {
-        if let Some(id) = op_id {
-            if crate::operations::is_cancel_requested(state, id)? {
-                crate::operations::mark_cancelled(state, id)?;
-                return Err(BiError::Invalid("operation cancelled".into()));
+        const BATCH: usize = 1000;
+        loop {
+            if let Some(id) = op_id {
+                if crate::operations::is_cancel_requested(state, id)? {
+                    crate::operations::mark_cancelled(state, id)?;
+                    return Err(BiError::Invalid("operation cancelled".into()));
+                }
             }
-        }
             // Page candidates directly (issue #436): memory::list has no
             // superseded_by filter, so it could pair an active memory with a
             // zombie copy. Only active rows are eligible for merging.

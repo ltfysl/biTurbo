@@ -47,13 +47,11 @@ pub fn open_pool(db_path: &Path) -> BiResult<DbPool> {
 /// Upgrade the database before pooled connections are opened. A process-wide
 /// file lock prevents the GUI and MCP sidecar from racing through migrations.
 fn prepare_database(db_path: &Path) -> BiResult<()> {
-    let parent = db_path
-        .parent()
-        .ok_or_else(|| crate::error::BiError::Db {
-            message: "database has no parent directory".into(),
-            code: None,
-            extended: None,
-        })?;
+    let parent = db_path.parent().ok_or_else(|| crate::error::BiError::Db {
+        message: "database has no parent directory".into(),
+        code: None,
+        extended: None,
+    })?;
     let lock_path = db_path.with_extension("write.lock");
     let lock = OpenOptions::new()
         .create(true)
@@ -173,10 +171,7 @@ fn prune_old_backups(backup_dir: &Path) -> BiResult<()> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if (name.starts_with("biturbo-pre-v") && name.ends_with(".db"))
             || (path.is_dir() && name.starts_with("index-metadata-pre-v"))
         {

@@ -200,7 +200,10 @@ impl PendingChunk {
             code = code.chars().take(MAX_CHUNK_TEXT).collect();
             end_line = self.start_line + code.matches('\n').count() as i64;
         }
-        format!("// {}:{}-{}\n{}", self.file_path, self.start_line, end_line, code)
+        format!(
+            "// {}:{}-{}\n{}",
+            self.file_path, self.start_line, end_line, code
+        )
     }
 }
 
@@ -288,7 +291,9 @@ pub fn ingest_project_controlled(
         }
     }
     if walk_error_count > 5 {
-        result.errors.push(format!("... and {} more walk errors", walk_error_count - 5));
+        result
+            .errors
+            .push(format!("... and {} more walk errors", walk_error_count - 5));
     }
 
     let conn = state.db.conn()?;
@@ -619,13 +624,13 @@ pub fn ingest_project_controlled(
     })?;
 
     emit_progress(
-      state,
-      project_id,
-      "embedding",
-      total_chunks,
-      total_chunks,
-      None,
-      total_chunks,
+        state,
+        project_id,
+        "embedding",
+        total_chunks,
+        total_chunks,
+        None,
+        total_chunks,
     );
     if let Some(id) = operation_id {
         crate::operations::update_progress(
@@ -683,7 +688,10 @@ fn chunk_uids_for_rels(
             let prefix = format!("{project_id}::{rel}::");
             let pattern = format!(
                 "{}%",
-                prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+                prefix
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
             );
             conditions.push(format!("uid LIKE ?{} ESCAPE '\\'", params.len() + 1));
             params.push(pattern);
@@ -1087,13 +1095,14 @@ static LANG_BUNDLES: Lazy<HashMap<&'static str, LangBundle>> = Lazy::new(|| {
                 None
             }
         });
-        let import_query = import_query_src(name).and_then(|src| match Query::new(&language, src) {
-            Ok(q) => Some(q),
-            Err(e) => {
-                tracing::warn!("ingest: failed to compile import query for {name}: {e}");
-                None
-            }
-        });
+        let import_query =
+            import_query_src(name).and_then(|src| match Query::new(&language, src) {
+                Ok(q) => Some(q),
+                Err(e) => {
+                    tracing::warn!("ingest: failed to compile import query for {name}: {e}");
+                    None
+                }
+            });
         map.insert(
             name,
             LangBundle {
@@ -1774,7 +1783,6 @@ fn emit_progress(
         );
     }
 }
-
 
 #[cfg(test)]
 mod tests {

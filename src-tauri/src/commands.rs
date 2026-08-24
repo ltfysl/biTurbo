@@ -194,7 +194,6 @@ pub struct MultiIngestDone {
     pub results: Vec<ingest::IngestResult>,
 }
 
-
 #[tauri::command]
 pub fn start_ingest(
     state: State<'_, AppState>,
@@ -514,8 +513,7 @@ pub struct InstallMcpConfigResult {
 /// section and appending the new block. Preserves unrelated sections and sections
 /// whose names merely share a prefix with the biturbo table.
 fn merge_toml_codex_config(content: &str, bin_path: &str) -> String {
-    let biturbo_block =
-        format!("[mcp_servers.biturbo]\ncommand = \"{bin_path}\"\nargs = []\n");
+    let biturbo_block = format!("[mcp_servers.biturbo]\ncommand = \"{bin_path}\"\nargs = []\n");
 
     let mut new_content = String::new();
     let mut skip = false;
@@ -579,13 +577,17 @@ fn mcp_target_config_path(target: &str) -> BiResult<(std::path::PathBuf, &'stati
     Ok(match target {
         "cursor" => (home.join(".cursor").join("mcp.json"), "json-cursor"),
         "windsurf" => (
-            home.join(".codeium").join("windsurf").join("mcp_config.json"),
+            home.join(".codeium")
+                .join("windsurf")
+                .join("mcp_config.json"),
             "json-cursor",
         ),
         "claude" => (home.join(".claude.json"), "json-cursor"),
         "opencode" => {
             let base = if cfg!(target_os = "macos") {
-                home.join("Library").join("Application Support").join("opencode")
+                home.join("Library")
+                    .join("Application Support")
+                    .join("opencode")
             } else {
                 home.join(".config").join("opencode")
             };
@@ -682,10 +684,7 @@ pub struct McpConfigStatusArgs {
 /// Probe whether the biturbo MCP config already exists for a target.
 /// Returns true if the target's config file contains the biturbo entry.
 #[tauri::command]
-pub fn mcp_config_status(
-    _state: State<'_, AppState>,
-    args: McpConfigStatusArgs,
-) -> BiResult<bool> {
+pub fn mcp_config_status(_state: State<'_, AppState>, args: McpConfigStatusArgs) -> BiResult<bool> {
     let (config_path, format) = mcp_target_config_path(&args.target)?;
     if !config_path.exists() {
         return Ok(false);
@@ -693,7 +692,10 @@ pub fn mcp_config_status(
     match format {
         "json-cursor" => {
             let root = read_json_config(&config_path).unwrap_or(serde_json::json!({}));
-            Ok(root.get("mcpServers").and_then(|s| s.get("biturbo")).is_some())
+            Ok(root
+                .get("mcpServers")
+                .and_then(|s| s.get("biturbo"))
+                .is_some())
         }
         "json-opencode" => {
             let root = read_json_config(&config_path).unwrap_or(serde_json::json!({}));
@@ -761,16 +763,26 @@ mod tests {
     fn toml_merge_preserves_prefixed_sections() {
         let input = "[foo]\nbar = 1\n\n[mcp_servers.biturbo-foo]\ncommand = \"/other\"\n\n[mcp_servers.biturbo]\ncommand = \"/old\"\n\n[baz]\nqux = 2\n";
         let out = merge_toml_codex_config(input, "/new");
-        assert!(!out.contains("/old"), "old biturbo section should be removed");
-        assert!(out.contains("[mcp_servers.biturbo]"), "new biturbo section should be present");
+        assert!(
+            !out.contains("/old"),
+            "old biturbo section should be removed"
+        );
+        assert!(
+            out.contains("[mcp_servers.biturbo]"),
+            "new biturbo section should be present"
+        );
         assert!(out.contains("[foo]"), "unrelated [foo] should be preserved");
         assert!(out.contains("[baz]"), "unrelated [baz] should be preserved");
-        assert!(out.contains("[mcp_servers.biturbo-foo]"), "prefixed section should be preserved");
+        assert!(
+            out.contains("[mcp_servers.biturbo-foo]"),
+            "prefixed section should be preserved"
+        );
     }
 
     #[test]
     fn toml_merge_replaces_multiple_biturbo_sections() {
-        let input = "[mcp_servers.biturbo]\ncommand = \"/a\"\n\n[mcp_servers.biturbo]\ncommand = \"/b\"\n";
+        let input =
+            "[mcp_servers.biturbo]\ncommand = \"/a\"\n\n[mcp_servers.biturbo]\ncommand = \"/b\"\n";
         let out = merge_toml_codex_config(input, "/c");
         let count = out.matches("[mcp_servers.biturbo]").count();
         assert_eq!(count, 1, "only one biturbo section should remain");

@@ -142,8 +142,7 @@ pub fn update_progress(
     // after a terminal state a no-op (#415, #429).
     if let Ok(last) = get(state, id) {
         let same_phase = last.phase.as_deref() == Some(phase);
-        let same_progress =
-            last.current as usize == current && last.total as usize == total;
+        let same_progress = last.current as usize == current && last.total as usize == total;
         if now - last.updated_at < 250 && same_phase && same_progress {
             return Ok(());
         }
@@ -253,8 +252,12 @@ fn prune_operation_locks(state: &AppState) {
         return;
     };
     for entry in entries.flatten() {
-        let Ok(meta) = entry.metadata() else { continue; };
-        let Ok(modified) = meta.modified() else { continue; };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
         if let Ok(age) = std::time::SystemTime::now().duration_since(modified) {
             if age > threshold {
                 let _ = std::fs::remove_file(entry.path());

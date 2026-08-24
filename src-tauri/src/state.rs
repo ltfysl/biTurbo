@@ -9,10 +9,10 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Max bytes of index files to keep loaded in memory at once.
 /// turbovec keeps the full quantized index in RAM, so this directly
@@ -594,11 +594,13 @@ impl AppState {
                 Err(rusqlite::Error::QueryReturnedNoRows) => {
                     return Err(BiError::NotFound(format!("project {project_id}")));
                 }
-                Err(error) => return Err(BiError::Db {
-                    message: error.to_string(),
-                    code: None,
-                    extended: None,
-                }),
+                Err(error) => {
+                    return Err(BiError::Db {
+                        message: error.to_string(),
+                        code: None,
+                        extended: None,
+                    })
+                }
             }
         };
         if matches!(model.as_str(), "BGE-small-en" | "BGE-small-en-v1.5") {

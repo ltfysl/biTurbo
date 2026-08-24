@@ -262,11 +262,10 @@ pub fn resolve_project_id(
                         }
                         let conn = state.db.conn()?;
                         let ids: Vec<String> = {
-                            let mut stmt = conn.prepare(
-                                "SELECT id FROM projects WHERE name = ?1 ORDER BY id",
-                            )?;
-                            let rows = stmt
-                                .query_map(rusqlite::params![name], |r| r.get::<_, String>(0))?;
+                            let mut stmt = conn
+                                .prepare("SELECT id FROM projects WHERE name = ?1 ORDER BY id")?;
+                            let rows =
+                                stmt.query_map(rusqlite::params![name], |r| r.get::<_, String>(0))?;
                             rows.filter_map(Result::ok).collect()
                         };
                         match ids.len() {

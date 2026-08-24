@@ -701,8 +701,14 @@ mod tests {
             score: 1.0,
         };
         let out = format_context_block(&[hit]);
-        assert!(out.starts_with("<biTurboContext>"), "unexpected opening tag: {out}");
-        assert!(out.ends_with("</biTurboContext>"), "unexpected closing tag: {out}");
+        assert!(
+            out.starts_with("<biTurboContext>"),
+            "unexpected opening tag: {out}"
+        );
+        assert!(
+            out.ends_with("</biTurboContext>"),
+            "unexpected closing tag: {out}"
+        );
     }
 
     #[test]
@@ -721,7 +727,9 @@ mod tests {
     #[test]
     fn tool_schemas_parses_and_advertises_tools() {
         let schemas = tool_schemas();
-        let arr = schemas.as_array().expect("tool_schemas must return an array");
+        let arr = schemas
+            .as_array()
+            .expect("tool_schemas must return an array");
         assert!(!arr.is_empty(), "MCP must advertise at least one tool");
         assert!(
             arr.iter().all(|t| t.get("name").is_some()),

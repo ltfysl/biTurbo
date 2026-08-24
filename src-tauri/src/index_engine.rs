@@ -69,23 +69,23 @@ impl ProjectIndex {
             (idx, HashMap::new(), HashMap::new(), 1)
         };
 
-    let mut inner = Inner {
-        index,
-        uid_to_extid,
-        extid_to_uid,
-        next_extid,
-        uid_set_digest: String::new(),
-    };
-    inner.recompute_digest();
-    Ok(Self {
-        project_id: project_id.to_string(),
-        dim,
-        bit_width,
-        inner: Mutex::new(inner),
-        file_path,
-        dirty: AtomicU64::new(0),
-        last_change: Mutex::new(Instant::now()),
-    })
+        let mut inner = Inner {
+            index,
+            uid_to_extid,
+            extid_to_uid,
+            next_extid,
+            uid_set_digest: String::new(),
+        };
+        inner.recompute_digest();
+        Ok(Self {
+            project_id: project_id.to_string(),
+            dim,
+            bit_width,
+            inner: Mutex::new(inner),
+            file_path,
+            dirty: AtomicU64::new(0),
+            last_change: Mutex::new(Instant::now()),
+        })
     }
 
     pub fn file_path(&self) -> &Path {

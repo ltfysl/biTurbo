@@ -13,7 +13,11 @@ pub enum BiError {
     Invalid(String),
 
     #[error("database error: {message}")]
-    Db { message: String, code: Option<String>, extended: Option<i32> },
+    Db {
+        message: String,
+        code: Option<String>,
+        extended: Option<i32>,
+    },
 
     #[error("index error: {0}")]
     Index(String),

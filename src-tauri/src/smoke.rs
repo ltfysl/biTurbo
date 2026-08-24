@@ -170,7 +170,7 @@ mod tests {
             assert!(wait_for_index_flush(
                 &state,
                 &state.default_project_id,
-            Duration::from_secs(30)
+                Duration::from_secs(30)
             ));
             mem.uid
         };
