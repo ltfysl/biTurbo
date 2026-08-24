@@ -194,6 +194,7 @@ async function main() {
     const t0 = Date.now();
     let seeded = 0;
     const seedFailures: string[] = [];
+// (#544) Track seed successes and failures so the test fails if the corpus shrinks.
     for (const mem of memories) {
       try {
         const r = await client.callTool("remember", {
