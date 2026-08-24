@@ -1,11 +1,12 @@
 import clsx from "clsx";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp, useContextMenu } from "../lib/store";
 import type { GraphNode, GraphEdge } from "../lib/types";
 import {
   Share2,
   Filter,
   Search,
+  X,
   ZoomIn,
   ZoomOut,
   RefreshCw,
@@ -48,6 +49,8 @@ const LAYOUT_H = 1000;
 const LAYOUT_CX = LAYOUT_W / 2;
 const LAYOUT_CY = LAYOUT_H / 2;
 
+const DRAG_THRESHOLD_PX = 4;
+
 export function Graph() {
   const graph = useApp((s) => s.graph);
   const refreshGraph = useApp((s) => s.refreshGraph);
@@ -60,6 +63,7 @@ export function Graph() {
   const [filter, setFilter] = useState<Set<string>>(new Set(NODE_KINDS));
   const [edgeFilter, setEdgeFilter] = useState<Set<string>>(new Set(Object.keys(EDGE_COLORS)));
   const [query, setQuery] = useState("");
+  const [matchIndex, setMatchIndex] = useState(-1);
   const [hover, setHover] = useState<string | null>(null);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
   const [posMap, setPosMap] = useState<Record<string, Pos>>({});
@@ -73,6 +77,7 @@ export function Graph() {
     vx: number;
     vy: number;
   } | null>(null);
+  const pointerMoved = useRef(false);
   const [size, setSize] = useState({ w: 800, h: 600 });
   // Node order of the in-flight layout request: the worker answers with
   // positions parallel to this array.
@@ -101,6 +106,34 @@ export function Graph() {
     return () => ro.disconnect();
   }, []);
 
+  // (#196) Zoom is anchored around the chosen viewport point, not the top-left origin.
+  const zoomAt = useCallback((factor: number, mx: number, my: number) => {
+    setView((v) => {
+      const k = Math.max(0.1, Math.min(4, v.k * factor));
+      const wx = (mx - v.x) / v.k;
+      const wy = (my - v.y) / v.k;
+      return { k, x: mx - wx * k, y: my - wy * k };
+    });
+  }, [setView]);
+
+  // (#195) Attach a native, non-passive wheel listener so preventDefault works and pinch can be handled.
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const isPinch = e.ctrlKey || e.metaKey;
+    const factor = isPinch ? (e.deltaY < 0 ? 1.15 : 0.87) : (e.deltaY < 0 ? 1.1 : 0.9);
+    zoomAt(factor, mx, my);
+  }, [zoomAt]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
   // Live count of nodes matching the search box, shown as "n/total".
   const matchCount = useMemo(() => {
     if (!data || !query.trim()) return 0;
@@ -109,6 +142,11 @@ export function Graph() {
       (n) => n.label.toLowerCase().includes(q) || (n.file_path ?? "").toLowerCase().includes(q),
     ).length;
   }, [data, query]);
+
+  // (#200) Reset the cycled search match index when the query changes.
+  useEffect(() => {
+    setMatchIndex(-1);
+  }, [query]);
 
   // Layout pipeline:
   // 1. Render immediately at cheap seed positions (file circle + jittered
@@ -156,6 +194,7 @@ export function Graph() {
           : (raw as Record<string, Pos>);
         setPosMap(posMapFromWorker);
         if (m.type === "result") {
+          // (#198) Layout/paint timing is logged to the backend, not shown in the production toolbar.
           send(
             "info",
             `[graph] layout refined · ${m.iterationsDone} iters · ${Math.round(m.elapsedMs)}ms`,
@@ -213,15 +252,15 @@ export function Graph() {
     }
   }
 
+  // (#199) Empty state uses in-app project indexing language instead of an MCP command name.
   if (!graph) {
     return (
       <div className="flex h-full items-center justify-center p-12 text-center">
         <div>
           <Share2 size={28} className="mx-auto mb-3 text-text-dim" />
-          <div className="font-serif text-lg">No graph for this project yet.</div>
+          <div className="font-serif text-lg">No code index for this project yet.</div>
           <div className="mt-1 text-sm text-text-muted">
-            Index your code once and the symbol graph appears here. Start from{" "}
-            <span className="kbd">Projects → Re-index code</span>.
+            Open <span className="kbd">Projects → Re-index code</span>, or let your agent index the repo.
           </div>
           <div className="mt-4 flex items-center justify-center gap-2">
             <button onClick={() => setAppView("projects")} className="btn-primary">
@@ -240,20 +279,6 @@ export function Graph() {
 
   const hoverNode = hover && data ? data.nodes.find((n) => n.uid === hover) : null;
 
-  function onWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    setView((v) => {
-      const k = Math.max(0.1, Math.min(4, v.k * factor));
-      // Keep the world point under the cursor fixed while zooming.
-      const wx = (mx - v.x) / v.k;
-      const wy = (my - v.y) / v.k;
-      return { k, x: mx - wx * k, y: my - wy * k };
-    });
-  }
   function onKeyDown(e: React.KeyboardEvent) {
     const step = 50 / view.k;
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
@@ -301,15 +326,21 @@ export function Graph() {
     });
   }
 
+  // (#197) Start tracking pointer movement for a drag threshold.
   function onMouseDown(e: React.MouseEvent) {
     dragRef.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    pointerMoved.current = false;
   }
 
+  // (#197) Track the pointer and suppress click when a drag exceeds the threshold.
   function onMouseMove(e: React.MouseEvent) {
     const drag = dragRef.current;
     if (!drag) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
+    if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+      pointerMoved.current = true;
+    }
     setView((v) => ({
       ...v,
       x: drag.vx + dx,
@@ -350,7 +381,9 @@ export function Graph() {
     setHoverPos(uid ? { x: mx, y: my } : null);
   }
 
+  // (#197) Ignore clicks that were part of a pan.
   function onClick(e: React.MouseEvent) {
+    if (pointerMoved.current) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const uid = hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (!uid || !data) return;
@@ -408,6 +441,33 @@ export function Graph() {
     showMenu(e.clientX, e.clientY, items);
   }
 
+
+  // (#200) Enter / Shift+Enter cycles through search matches and centers the view on each.
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter" || !data || !query.trim()) return;
+    e.preventDefault();
+    const q = query.trim().toLowerCase();
+    const matches = data.nodes.filter(
+      (n) => n.label.toLowerCase().includes(q) || (n.file_path ?? "").toLowerCase().includes(q),
+    );
+    if (matches.length === 0) return;
+    let next = matchIndex;
+    if (e.shiftKey) {
+      next = next <= 0 ? matches.length - 1 : next - 1;
+    } else {
+      next = next + 1 >= matches.length ? 0 : next + 1;
+    }
+    setMatchIndex(next);
+    const n = matches[next];
+    const p = posMap[n.uid];
+    if (!p) return;
+    setView((v) => ({
+      ...v,
+      x: size.w / 2 - p.x * v.k,
+      y: size.h / 2 - p.y * v.k,
+    }));
+    setHover(n.uid);
+  }
   function resetView() {
     setView({ x: 0, y: 0, k: 0.5 });
   }
@@ -426,14 +486,13 @@ export function Graph() {
           role="img"
           aria-label="Graph of code symbols — arrow keys pan, plus/minus zoom"
           onKeyDown={onKeyDown}
-          onWheel={onWheel}
           onMouseDown={onMouseDown}
           onMouseMove={(e) => {
             onMouseMove(e);
             onMouseMoveHover(e);
           }}
           onMouseUp={onMouseUp}
-          onMouseLeave={() => { onMouseUp(); setHover(null); setHoverPos(null); }}
+          onMouseLeave={() => { onMouseUp(); pointerMoved.current = false; setHover(null); setHoverPos(null); }}
           onClick={onClick}
           onContextMenu={onContextMenu}
         />
@@ -501,16 +560,27 @@ export function Graph() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
                 placeholder="Search nodes…"
-                className="input w-48 py-1 pl-7 pr-14 text-xs"
+                className="input w-48 py-1 pl-7 pr-20 text-xs"
               />
               {query.trim() && (
-                <span
-                  className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-muted"
-                  title="Matching nodes"
-                >
-                  {matchCount}/{data?.nodes.length ?? 0}
-                </span>
+                <>
+                  <span
+                    className="pointer-events-none absolute right-7 top-1/2 -translate-y-1/2 font-mono text-[10px] text-text-muted"
+                    title="Matching nodes"
+                  >
+                    {matchCount}/{data?.nodes.length ?? 0}
+                  </span>
+                  <button
+                    onClick={() => setQuery("")}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-dim hover:text-text"
+                    title="Clear search"
+                    aria-label="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                </>
               )}
             </div>
             <button onClick={reload} className="btn-ghost" title="Refresh">
@@ -526,14 +596,14 @@ export function Graph() {
           <div className="flex-1" />
           <div className="pointer-events-auto absolute bottom-3 right-3 flex flex-col gap-1">
             <button
-              onClick={() => setView((v) => ({ ...v, k: Math.min(4, v.k * 1.2) }))}
+              onClick={() => zoomAt(1.2, size.w / 2, size.h / 2)}
               className="btn-outline h-8 w-8 p-0"
               title="Zoom in"
             >
               <ZoomIn size={14} />
             </button>
             <button
-              onClick={() => setView((v) => ({ ...v, k: Math.max(0.1, v.k * 0.83) }))}
+              onClick={() => zoomAt(0.83, size.w / 2, size.h / 2)}
               className="btn-outline h-8 w-8 p-0"
               title="Zoom out"
             >
@@ -739,7 +809,8 @@ function drawScene(
     ctx.fill();
     ctx.stroke();
 
-    if (isHover) {
+    // (#200) Persistent labels for search matches, not just hover.
+    if (isHover || (q && isMatch)) {
       ctx.globalAlpha = 1;
       ctx.fillStyle = cssVar("--text", "#E8E2D6");
       ctx.font = `${11 * view.k}px Inter, system-ui, sans-serif`;

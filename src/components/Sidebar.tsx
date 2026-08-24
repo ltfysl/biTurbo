@@ -137,6 +137,7 @@ function ProjectList() {
   const refreshGraph = useApp((s) => s.refreshGraph);
   const showMenu = useContextMenu();
   const confirm = useConfirm();
+  // (#194) Sidebar project toasts (ingest, delete) always use the project name, never the raw id.
 
   async function ingestNow(projectId: string, rootPath: string, name: string) {
     try {
@@ -171,7 +172,7 @@ function ProjectList() {
         setCurrentProjectId(fallback);
       }
       await Promise.all([refreshProjects(), refreshStats(), refreshGraph().catch(() => {})]);
-      showToast({ kind: "ok", text: "Deleted" });
+      showToast({ kind: "ok", text: `Deleted ${name}` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }

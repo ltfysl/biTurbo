@@ -40,7 +40,8 @@ When in doubt, recall. It is cheap. It is correct.
 
 ---
 
-## 3. Tool surface (27 tools, all via MCP)
+## 3. Tool surface (34 tools, all via MCP)
+Canonical tool table, schemas, and examples are generated from `SCHEMAS_JSON` in `src-tauri/src/mcp.rs` — see [`docs/tools-table.md`](../docs/tools-table.md).
 
 ### Memories
 
@@ -285,7 +286,7 @@ Agent:
 User: "Show me everything we know about the biTurbo project."
 
 Agent:
-  1. list_memories(project_id="biturbo", limit=200)
+  1. list(project_id="biturbo", limit=200)
   2. Format nicely. Done.
 ```
 
@@ -296,7 +297,7 @@ Agent:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `remember` returns INTERNAL_ERROR | SQLite lock contention | Retry once after 200ms |
-| `search` returns 0 hits | Project empty, or wrong project_id | `list_projects`, `list_memories` to verify |
+| `search` returns 0 hits | Project empty, or wrong project_id | `list_projects`, `list` to verify |
 | `ingest_project` errors on a file | Unsupported language or parse error | Already per-file; check `errors[]` in result |
 | Stale/duplicate memories | Forgot to `consolidate` | Run `consolidate` |
 | MCP server not responding | Binary not on PATH | Check `Settings → MCP` in GUI, update path |

@@ -4,7 +4,7 @@ import { FileCode2, Hash, ThumbsDown, ThumbsUp } from "lucide-react";
 import clsx from "clsx";
 import { memo } from "react";
 import type { ContextMenuItem } from "./ContextMenu";
-import { useContextMenu } from "../lib/store";
+import { useApp, useContextMenu } from "../lib/store";
 import { CodeBlock } from "./CodeBlock";
 
 interface MemoryCardProps {
@@ -49,6 +49,7 @@ export const MemoryCard = memo(function MemoryCard({
   const isCode = memory.mem_type === "code";
 
   const showMenu = useContextMenu();
+  const selectMemoryByUid = useApp((s) => s.selectMemoryByUid);
   const handleContext =
     onContextMenu ??
     (contextMenuItems
@@ -74,6 +75,10 @@ export const MemoryCard = memo(function MemoryCard({
       showMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, contextMenuItems);
     }
   }
+  // (#175) Superseded badge links to the successor with a tooltip.
+  // (#176) Tag list shows '+N' overflow indicator when truncated.
+  // (#178) Recall explanation is humanized and hidden when both ranks are null.
+
 
   return (
     <div
@@ -97,9 +102,20 @@ export const MemoryCard = memo(function MemoryCard({
           {meta.label}
         </span>
         {memory.superseded_by && (
-          <span className="rounded-full border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-dim">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void selectMemoryByUid(String(memory.superseded_by));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+            }}
+            title="Replaced by a newer memory — click to view"
+            className="rounded-full border border-border-subtle px-1.5 py-0.5 text-[10px] text-text-dim hover:bg-surface-2 hover:text-text-muted"
+          >
             superseded
-          </span>
+          </button>
         )}
         {score != null && (
           <span
@@ -152,16 +168,38 @@ export const MemoryCard = memo(function MemoryCard({
             {t}
           </span>
         ))}
+        {memory.tags.length > 3 && (
+          <span
+            className="inline-flex items-center rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] text-text-dim"
+            title={memory.tags.slice(3).join(", ")}
+          >
+            +{memory.tags.length - 3}
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
-          {explanation && (
-            <span
-              className="font-mono text-[11px] text-text-dim"
-              title={`Matched: ${explanation.matched_terms.join(", ") || "semantic only"}`}
-            >
-              {explanation.vector_rank ? `v#${explanation.vector_rank}` : ""}
-              {explanation.vector_rank && explanation.fts_rank ? " · " : ""}
-              {explanation.fts_rank ? `text#${explanation.fts_rank}` : ""}
+          {explanation && (explanation.vector_rank != null || explanation.fts_rank != null) && (
+            <span className="group relative inline-block font-mono text-[11px] text-text-dim">
+              <span>
+                {explanation.vector_rank ? `semantic #${explanation.vector_rank}` : ""}
+                {explanation.vector_rank && explanation.fts_rank ? " · " : ""}
+                {explanation.fts_rank ? `keyword #${explanation.fts_rank}` : ""}
+              </span>
+              {explanation.matched_terms.length > 0 && (
+                <div className="invisible absolute bottom-full right-0 z-10 mb-1 w-44 rounded border border-border-subtle bg-surface p-2 shadow-sm group-hover:visible">
+                  <div className="mb-1 text-[10px] uppercase tracking-widest text-text-dim">Matched</div>
+                  <div className="flex flex-wrap gap-1">
+                    {explanation.matched_terms.map((term) => (
+                      <span
+                        key={term}
+                        className="inline-flex items-center rounded bg-surface-2 px-1 py-0.5 text-[10px] text-text-muted"
+                      >
+                        {term}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </span>
           )}
           {onFeedback && (

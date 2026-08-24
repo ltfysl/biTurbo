@@ -138,3 +138,14 @@ jobs:
       - run: pnpm mcp:test
         env:
           BITURBO_EMBED_EP: cpu
+
+  docs:
+    name: Generated docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify generated tool docs are up to date
+        run: |
+          python3 scripts/generate_tool_docs.py
+          git diff --exit-code docs/tools-table.md
