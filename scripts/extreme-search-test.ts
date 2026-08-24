@@ -338,6 +338,7 @@ async function main() {
           return mem?.domain;
         });
         const resolved = domains.filter((d): d is string => d !== undefined);
+// (#542) Only resolvable hits count; the forbidden-domain share must stay below the threshold.
         const forbiddenHits = resolved.filter(d => test.shouldNotBeAllFrom!.includes(d)).length;
         const forbiddenShare = resolved.length > 0 ? forbiddenHits / resolved.length : 1;
         if (resolved.length >= MIN_RESOLVED_HITS && forbiddenShare < MAX_FORBIDDEN_SHARE) {
