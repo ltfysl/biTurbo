@@ -200,6 +200,7 @@ class McpClient {
       .filter((c) => c.type === "text" && typeof c.text === "string")
       .map((c) => c.text!)
       .join("\n");
+    // (#535) Surface the tool-level isError flag so tests observe actual tool failures.
     return { _isError: result?.isError === true, _text: text, content: result?.content ?? [] };
   }
 
