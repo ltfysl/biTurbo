@@ -17,6 +17,7 @@ struct PendingMutation {
     uid: String,
     operation: String,
     content: Option<String>,
+    content_hash: Option<String>,
 }
 
 pub fn queue_index_upsert(
@@ -83,7 +84,7 @@ impl AppState {
         let pending: Vec<PendingMutation> = {
             let conn = self.db.conn()?;
             let mut stmt = conn.prepare(
-                "SELECT id, memory_uid, operation, content
+                "SELECT id, memory_uid, operation, content, content_hash
                  FROM index_mutations
                  WHERE project_id = ?1 AND applied_at IS NULL
                  ORDER BY id ASC",
@@ -94,6 +95,7 @@ impl AppState {
                     uid: r.get(1)?,
                     operation: r.get(2)?,
                     content: r.get(3)?,
+                    content_hash: r.get(4)?,
                 })
             })?;
             rows.filter_map(Result::ok).collect()
@@ -113,12 +115,20 @@ impl AppState {
         let mut deletes: Vec<String> = Vec::new();
         for mutation in latest.into_values() {
             match mutation.operation.as_str() {
-                "upsert" => upserts.push((
-                    mutation.uid,
-                    mutation.content.ok_or_else(|| {
+                "upsert" => {
+                    let content = mutation.content.ok_or_else(|| {
                         BiError::Index("upsert journal entry has no content".into())
-                    })?,
-                )),
+                    })?;
+                    if let Some(expected) = mutation.content_hash {
+                        if hash_text(&content) != expected {
+                            return Err(BiError::Index(format!(
+                                "journal content hash mismatch for {}: index drift detected",
+                                mutation.uid
+                            )));
+                        }
+                    }
+                    upserts.push((mutation.uid, content));
+                }
                 "delete" => deletes.push(mutation.uid),
                 other => return Err(BiError::Index(format!("unknown journal operation {other}"))),
             }

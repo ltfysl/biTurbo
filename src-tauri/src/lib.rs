@@ -44,6 +44,7 @@ pub use state::AppState;
 
 use std::sync::Arc;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tracing::info;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -77,6 +78,21 @@ fn init_logging(data_dir: &std::path::Path) {
         )
         .init();
 }
+
+fn show_error_and_exit<R: tauri::Runtime>(app: &tauri::App<R>, msg: String) -> ! {
+    let handle = app.handle().clone();
+    std::thread::spawn(move || {
+        handle
+            .dialog()
+            .message(msg)
+            .buttons(MessageDialogButtons::Ok)
+            .blocking_show();
+    })
+    .join()
+    .ok();
+    std::process::exit(1);
+}
+
 fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
     let data_dir = match dirs::data_dir() {
         Some(d) => d.join(crate::APP_DIR_NAME),
@@ -133,23 +149,38 @@ pub fn run() {
         None
     };
 
-    tauri::Builder::default()
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             tray::setup(app)?;
 
-            let data_dir = app.path().app_data_dir().expect("app data dir resolvable");
+            let data_dir = match app.path().app_data_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    show_error_and_exit(app, format!("cannot resolve app data directory: {e}"))
+                }
+            };
             std::fs::create_dir_all(&data_dir).ok();
 
             init_logging(&data_dir);
 
+            std::panic::set_hook(Box::new(|info| {
+                let message = format!("{}", info);
+                tracing::error!("panic: {message}");
+                eprintln!("panic: {message}");
+            }));
+
             info!("biTurbo starting…");
 
-            let mut state = AppState::open(&data_dir).expect("open app state");
+            let mut state = match AppState::open(&data_dir) {
+                Ok(s) => s,
+                Err(e) => show_error_and_exit(app, format!("cannot open biTurbo state: {e}")),
+            };
             state.app = Some(app.handle().clone());
             let state_arc = Arc::new(state);
             scheduler::spawn(state_arc.clone());
@@ -205,6 +236,10 @@ pub fn run() {
             commands::check_for_updates,
             commands::install_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(error) = run_result {
+        tracing::error!("error while running tauri application: {error}");
+        std::process::exit(1);
+    }
 }

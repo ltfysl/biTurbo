@@ -1,6 +1,6 @@
 use crate::consolidate::{self, ConsolidateReport};
 use crate::db::log_activity;
-use crate::error::BiResult;
+use crate::error::{BiError, BiResult};
 use crate::state::AppState;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -30,9 +30,12 @@ struct Shared {
     last_report: Option<ConsolidateReport>,
     running: bool,
     last_finish: Option<Instant>,
+    /// The next due time for the periodic run. Set on startup and after each
+    /// periodic run so `get_status` can report the correct pre-first-run delay.
+    next_due: Option<Instant>,
     /// A manual job is queued waiting for channel capacity (rare — the
     /// channel buffers up to 8 jobs). Re-enqueued by the worker after its
-    /// next run.
+    /// next run. (#459)
     queued: Option<ManualJob>,
 }
 
@@ -51,9 +54,17 @@ pub fn spawn(state: Arc<AppState>) {
     // Periodic scheduled run loop.
     let state_for_task = state.clone();
     tauri::async_runtime::spawn(async move {
+        {
+            let mut g = STATE.lock();
+            g.next_due = Some(Instant::now() + STARTUP_DELAY);
+        }
         tokio::time::sleep(STARTUP_DELAY).await;
         loop {
             run_once(Arc::clone(&state_for_task), None).await;
+            {
+                let mut g = STATE.lock();
+                g.next_due = Some(Instant::now() + INTERVAL);
+            }
             tokio::time::sleep(INTERVAL).await;
         }
     });
@@ -116,6 +127,8 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
     match tx.try_send(ManualJob { project_id }) {
         Ok(()) => Ok(()),
         Err(mpsc::error::TrySendError::Full(job)) => {
+            // #459: channel at capacity — hold the request so the worker
+            // re-enqueues it after its next run, coalescing manual jobs.
             let mut g = STATE.lock();
             g.queued = Some(job);
             Ok(())
@@ -131,15 +144,25 @@ pub fn enqueue(state: &AppState, project_id: Option<String>) -> BiResult<()> {
 /// path for the IPC command, but keep it in case other callers want to block
 /// on the result — e.g. tests).
 pub fn run_now_blocking(state: &AppState) -> BiResult<ConsolidateReport> {
-    let report = consolidate::consolidate(state, None)?;
+    {
+        let mut g = STATE.lock();
+        if g.running {
+            return Err(BiError::Internal("consolidate is already running".into()));
+        }
+        g.running = true;
+    }
+    let result = consolidate::consolidate(state, None);
     let now = chrono::Utc::now().timestamp_millis();
     {
         let mut g = STATE.lock();
-        g.last_run_at = Some(now);
-        g.last_report = Some(report.clone());
+        if let Ok(report) = &result {
+            g.last_run_at = Some(now);
+            g.last_report = Some(report.clone());
+        }
         g.running = false;
         g.last_finish = Some(Instant::now());
     }
+    let report = result?;
     state.db.write(|tx| {
         log_activity(
             tx,
@@ -158,10 +181,8 @@ pub fn get_status() -> ConsolidateStatus {
     let g = STATE.lock();
     let next = if g.running || g.queued.is_some() {
         0
-    } else if let Some(finish) = g.last_finish {
-        INTERVAL
-            .as_secs()
-            .saturating_sub(finish.elapsed().as_secs())
+    } else if let Some(due) = g.next_due {
+        due.saturating_duration_since(Instant::now()).as_secs()
     } else {
         INTERVAL.as_secs()
     };

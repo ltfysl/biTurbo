@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Max bytes of index files to keep loaded in memory at once.
 /// turbovec keeps the full quantized index in RAM, so this directly
@@ -31,6 +32,10 @@ pub struct AppState {
     pub index_memory_budget: u64,
     index_access_times: Arc<Mutex<HashMap<String, Instant>>>,
     index_rebuild_in_flight: Arc<Mutex<HashSet<String>>>,
+    /// Shared flag used to stop the background index flusher. (#420)
+    flusher_stop: Arc<AtomicBool>,
+    /// True only for the AppState created by `open`; clones must not stop it. (#420)
+    flusher_owner: bool,
 }
 
 impl Clone for AppState {
@@ -47,6 +52,16 @@ impl Clone for AppState {
             index_access_times: self.index_access_times.clone(),
             index_memory_budget: self.index_memory_budget,
             index_rebuild_in_flight: self.index_rebuild_in_flight.clone(),
+            flusher_stop: self.flusher_stop.clone(),
+            flusher_owner: false,
+        }
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        if self.flusher_owner {
+            self.flusher_stop.store(true, Ordering::Relaxed);
         }
     }
 }
@@ -81,6 +96,8 @@ impl AppState {
             index_access_times: Arc::new(Mutex::new(HashMap::new())),
             index_rebuild_in_flight: Arc::new(Mutex::new(HashSet::new())),
             index_memory_budget: DEFAULT_INDEX_BUDGET,
+            flusher_stop: Arc::new(AtomicBool::new(false)),
+            flusher_owner: true,
         };
 
         // Ensure index files exist on disk, but do NOT load them into memory.
@@ -94,18 +111,25 @@ impl AppState {
             let state_for_thread = state.clone();
             std::thread::Builder::new()
                 .name("biturbo-index-flusher".into())
-                .spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    // 1) flush dirty indices
-                    let snapshot: Vec<Arc<ProjectIndex>> =
-                        state_for_thread.indices.read().values().cloned().collect();
-                    for idx in snapshot {
-                        let _ = idx.maybe_flush(std::time::Duration::from_millis(300), false);
+                .spawn(move || {
+                    let stop = state_for_thread.flusher_stop.clone();
+                    while !stop.load(Ordering::Relaxed) {
+                        // Sleep in 100ms slices so the flusher reacts to stop quickly. (#420)
+                        for _ in 0..50 {
+                            if stop.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        let snapshot: Vec<Arc<ProjectIndex>> =
+                            state_for_thread.indices.read().values().cloned().collect();
+                        for idx in snapshot {
+                            let _ = idx.maybe_flush(std::time::Duration::from_millis(300), false);
+                        }
+                        let _ = state_for_thread
+                            .evict_stale_indices(std::time::Duration::from_secs(600));
+                        let _ = state_for_thread.evict_if_over_budget();
                     }
-                    // 2) evict old indices (not touched in 10 min or over budget)
-                    let _ =
-                        state_for_thread.evict_stale_indices(std::time::Duration::from_secs(600));
-                    let _ = state_for_thread.evict_if_over_budget();
                 })
                 .ok();
         }
@@ -569,7 +593,11 @@ impl AppState {
                 Err(rusqlite::Error::QueryReturnedNoRows) => {
                     return Err(BiError::NotFound(format!("project {project_id}")));
                 }
-                Err(error) => return Err(BiError::Db(error.to_string())),
+                Err(error) => return Err(BiError::Db {
+                    message: error.to_string(),
+                    code: None,
+                    extended: None,
+                }),
             }
         };
         if matches!(model.as_str(), "BGE-small-en" | "BGE-small-en-v1.5") {

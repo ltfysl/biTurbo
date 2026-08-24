@@ -816,7 +816,7 @@ fn execute_model_rebuild(
             .open(indices.join(format!("{project_id}.mutation.lock")))?;
         fs4::fs_std::FileExt::lock_exclusive(&lock)?;
         // Hold the cache write lock across the whole swap so a concurrent
-        // get_or_load_index can never re-open the old .tvim between renames.
+        // get_or_load_index can never re-open the old .tvim between renames (#546).
         let mut indices_guard = state.indices.write();
         indices_guard.remove(project_id);
         if actual.exists() {

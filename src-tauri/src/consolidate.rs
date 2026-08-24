@@ -253,12 +253,12 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
 fn merge_pair(state: &AppState, keep_uid: &str, drop_uid: &str) -> BiResult<bool> {
     let keep = memory::get(state, keep_uid)?;
     let drop_ = memory::get(state, drop_uid)?;
-    let (Some(keep), Some(_drop_)) = (keep, drop_) else {
+    let (Some(keep), Some(drop_mem)) = (keep, drop_) else {
         return Ok(false);
     };
 
     let mut merged_tags: Vec<String> = keep.tags.clone();
-    for t in &_drop_.tags {
+    for t in &drop_mem.tags {
         if !merged_tags.contains(t) {
             merged_tags.push(t.clone());
         }
@@ -288,6 +288,15 @@ fn merge_pair(state: &AppState, keep_uid: &str, drop_uid: &str) -> BiResult<bool
         )?;
         if n > 0 {
             crate::persistence::queue_index_delete(tx, &keep.project_id, drop_uid)?;
+            // #444: fold the dropped memory's engagement into the survivor so
+            // the merge is not lossy.
+            tx.execute(
+                "UPDATE memories SET access_count = access_count + ?1,
+                                     importance = MAX(importance, ?2),
+                                     updated_at = ?3
+                 WHERE uid = ?4 AND superseded_by IS NULL",
+                rusqlite::params![drop_mem.access_count, drop_mem.importance, now, keep_uid],
+            )?;
             tx.execute(
                 "UPDATE projects SET memory_count = MAX(0, memory_count - 1), updated_at = ?1
                  WHERE id = ?2",

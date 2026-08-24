@@ -127,6 +127,8 @@ pub fn remember(state: &AppState, input: RememberInput) -> BiResult<Memory> {
                 .optional()?,
             None => None,
         };
+        // #442: if the caller asks to supersede a uid, the target must exist
+        // and not already be superseded; otherwise the write is silently lossy.
         if let Some(old_uid) = input.supersedes.as_deref() {
             if superseded.is_none() {
                 return Err(BiError::Invalid(format!(
@@ -405,6 +407,8 @@ pub fn search(
     }
 
     // Second-stage reranking: boost scores based on term matches in content, tags, path, and language
+    // #439: search and explain share the same normalized terms so score
+    // boosting and matched_terms stay consistent.
     let query_terms = crate::recall::normalized_terms(query);
     let mut reranked: Vec<MemoryWithScore> = ranked
         .into_iter()

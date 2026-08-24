@@ -111,6 +111,8 @@ async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
     match req.method.as_str() {
         "initialize" => Some(ok(
             id,
+            // Built the initialize result from the canonical MCP_INSTRUCTIONS only;
+            // an earlier inline copy was removed to avoid drift (#482).
             json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
@@ -635,7 +637,9 @@ fn format_context_block(hits: &[MemoryWithScore]) -> String {
 }
 
 fn tool_schemas() -> Value {
-    serde_json::from_str(SCHEMAS_JSON).unwrap_or_else(|_| json!([]))
+    // A parse failure here is a build bug; fail loudly instead of silently
+    // serving an empty tool list to every client (#493).
+    serde_json::from_str(SCHEMAS_JSON).expect("MCP tool schemas must be valid JSON")
 }
 
 const SCHEMAS_JSON: &str = r#"[
@@ -711,6 +715,17 @@ mod tests {
         assert!(
             !SCHEMAS_JSON.contains("List tags for a project with usage counts. Newest first."),
             "old list_tags description should be gone"
+        );
+    }
+
+    #[test]
+    fn tool_schemas_parses_and_advertises_tools() {
+        let schemas = tool_schemas();
+        let arr = schemas.as_array().expect("tool_schemas must return an array");
+        assert!(!arr.is_empty(), "MCP must advertise at least one tool");
+        assert!(
+            arr.iter().all(|t| t.get("name").is_some()),
+            "every advertised tool must have a name"
         );
     }
 }
