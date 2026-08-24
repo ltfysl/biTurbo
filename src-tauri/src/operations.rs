@@ -368,6 +368,7 @@ pub fn retry(state: &AppState, id: &str) -> BiResult<Operation> {
         return Err(BiError::Invalid(format!("operation {id} is not retryable")));
     }
     match operation.kind.as_str() {
+        // Preserve watch_ingest semantics on retry; don't downgrade to one-shot ingest (#416).
         "ingest" | "watch_ingest" => {
             let project_id = operation
                 .project_id
