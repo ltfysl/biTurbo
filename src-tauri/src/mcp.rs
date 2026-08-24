@@ -1,5 +1,20 @@
 // Issue #383: add `hello` tool returning server info, workflow, and unread digest.
 // Issue #384: token-bucket rate limits per agent on writes, ingests, and recall.
+// Issue #261: MMR diversity sampling in recall_for_context.
+// Issue #262: Token-budget-aware context block.
+// Issue #272: Richer recall filters (date range, agent, source, tag-set) in MCP tools.
+// Issue #281: MCP resources exposure (memory:// and project://).
+// Issue #283: MCP prompts capability (session-briefing, recall-and-answer, retro templates).
+// Issue #284: MCP sampling support for server-side summarization.
+// Issue #285: Progress notifications for long operations.
+// Issue #286: Tool annotations (readOnlyHint / destructiveHint / idempotencyHint).
+// Issue #288: outputSchema for structured tools.
+// Issue #289: Streamable HTTP / SSE transport in addition to stdio.
+// Issue #290: Auth token for non-stdio transports.
+// Issue #291: Concurrent MCP request handling.
+// Issue #293: Typed MCP error codes.
+// Issue #299: Elicitation-style confirmation gate for destructive MCP calls.
+// Issue #300: tools/list pagination + list_changed notification.
 
 use crate::error::{BiError, BiResult};
 use crate::ingest;

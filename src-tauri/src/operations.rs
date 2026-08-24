@@ -1,4 +1,5 @@
 //! Persisted supervision for long-running work.
+// Issue #285: Progress notifications for long operations.
 
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;

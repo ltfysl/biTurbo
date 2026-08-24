@@ -1,6 +1,9 @@
 // Standalone MCP server binary. Spawned by AI agents via stdio.
 // Listens on stdin/stdout for JSON-RPC 2.0 (MCP protocol).
 // Issue #395: add `biturbo-mcp doctor` CLI diagnostics with --fix and JSON output.
+// Issue #289: Streamable HTTP / SSE transport in addition to stdio.
+// Issue #290: Auth token for non-stdio transports.
+// Issue #294: --data-dir flag / BITURBO_DATA_DIR override.
 
 use anyhow::Result;
 use biturbo_lib::mcp::run_mcp_server_stdio;

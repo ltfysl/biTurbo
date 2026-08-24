@@ -1,4 +1,6 @@
 // Issue #386: event subscribers (webhooks / UDS) for memory/ingest/consolidate events.
+// Issue #279: Configurable decay curve and per-type half-life.
+// Issue #274: Feedback-driven auto-tuning of ranking boosts.
 
 use crate::consolidate::{self, ConsolidateReport};
 use crate::db::log_activity;

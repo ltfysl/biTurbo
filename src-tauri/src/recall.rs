@@ -1,6 +1,9 @@
 //! Explainable recall and local adaptive feedback.
 // Issue #392: expand recall golden corpus (60 cases, nDCG/MRR/latency per class).
 // Issue #391: wire recall-eval into CI with threshold gating and trend artifacts.
+// Issue #261: MMR diversity sampling in recall_for_context.
+// Issue #274: Feedback-driven auto-tuning of ranking boosts.
+// Issue #275: Zero-hit query analytics and gap report.
 
 use crate::error::{BiError, BiResult};
 use crate::memory::{self, MemoryWithScore};

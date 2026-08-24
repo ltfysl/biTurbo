@@ -1,6 +1,7 @@
 //! biTurbo — local-first memory layer for AI coding agents.
 // Issue #394: expose backend/frontend logs and health diagnostics in UI/CLI.
 // Issue #393: add Criterion benchmarks for cold-start, recall, ingest, consolidate.
+// Issue #295: Config file support (config.toml) for runtime knobs.
 
 //!
 //! Architecture
