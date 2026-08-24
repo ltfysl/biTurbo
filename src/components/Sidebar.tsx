@@ -129,8 +129,8 @@ function ProjectList() {
 
   async function ingestNow(projectId: string, rootPath: string) {
     try {
-      const job = await api.ingestProject(projectId, rootPath);
-      useApp.getState().registerIngestJob(projectId, job.job_id);
+      const job = await api.startIngest(projectId, rootPath);
+      useApp.getState().registerIngestJob(projectId, job.id);
       showToast({ kind: "ok", text: `Indexing ${projectId}…` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });

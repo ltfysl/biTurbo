@@ -194,16 +194,6 @@ pub struct MultiIngestDone {
     pub results: Vec<ingest::IngestResult>,
 }
 
-#[tauri::command]
-pub fn ingest_project(state: State<'_, AppState>, args: IngestArgs) -> BiResult<IngestJobResponse> {
-    let root = std::path::PathBuf::from(&args.root_path);
-    let operation = crate::operations::start_ingest(state.inner(), &args.project_id, &root)?;
-
-    Ok(IngestJobResponse {
-        job_id: operation.id,
-        project_id: args.project_id,
-    })
-}
 
 #[tauri::command]
 pub fn start_ingest(

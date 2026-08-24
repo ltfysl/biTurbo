@@ -114,11 +114,6 @@ export interface IngestResult {
   edges_created: number;
 }
 
-export interface IngestJob {
-  job_id: string;
-  project_id: string;
-}
-
 export interface IngestProgress {
   project_id: string;
   phase: string;

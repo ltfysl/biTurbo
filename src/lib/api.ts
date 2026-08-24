@@ -6,7 +6,6 @@ import type {
   AgentEntry,
   ActivityEntry,
   Stats,
-  IngestJob,
   ConsolidateStatus,
   GraphData,
   BootstrapPayload,
@@ -133,10 +132,6 @@ export const api = {
       projectId: project_id,
     }),
 
-  ingestProject: (project_id: string, root_path: string) =>
-    invoke<IngestJob>("ingest_project", {
-      args: { project_id, root_path },
-    }),
 
   startIngest: (project_id: string, root_path: string) =>
     invoke<Operation>("start_ingest", {

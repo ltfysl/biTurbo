@@ -272,11 +272,11 @@ export const useApp = create<AppStore>((set, get) => ({
   registerIngestJob: (project_id, job_id) =>
     set((s) => ({ ingestJobIds: { ...s.ingestJobIds, [project_id]: job_id } })),
   startIngest: async (project_id, root_path) => {
-    const job = await api.ingestProject(project_id, root_path);
+    const job = await api.startIngest(project_id, root_path);
     set((s) => ({
       ingestJobs: {
         ...s.ingestJobs,
-        [job.job_id]: {
+        [job.id]: {
           project_id,
           phase: "queued",
           current: 0,
@@ -286,7 +286,7 @@ export const useApp = create<AppStore>((set, get) => ({
         },
       },
     }));
-    return job.job_id;
+    return job.id;
   },
   cancelIngest: async (job_id) => {
     await api.cancelOperation(job_id);

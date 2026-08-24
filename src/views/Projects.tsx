@@ -72,8 +72,8 @@ export function Projects() {
       return;
     }
     try {
-      const job = await api.ingestProject(projectId, root);
-      registerIngestJob(projectId, job.job_id);
+      const job = await api.startIngest(projectId, root);
+      registerIngestJob(projectId, job.id);
       showToast({ kind: "info", text: `Started indexing ${projectId}…` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
