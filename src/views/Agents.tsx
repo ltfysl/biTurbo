@@ -63,7 +63,6 @@ export function Agents() {
             directly. Each agent's reads and writes are attributed automatically.
           </p>
         </div>
-conflict://4
         <button
           onClick={() => void refresh()}
           disabled={refreshing}
@@ -83,7 +82,7 @@ conflict://4
           void register();
         }}
       >
-        <div className="mb-2 text-[10px] uppercase tracking-widest text-text-dim">
+        <div className="mb-2 text-[11px] uppercase tracking-widest text-text-dim">
           Register a new agent
         </div>
         <div className="flex gap-2">
@@ -148,7 +147,20 @@ conflict://4
                 </div>
                 <div className="mt-0.5 flex items-center gap-2 text-[11px] text-text-dim">
                   <span>
-                    last seen {timeAgo(a.last_seen)} · id <span className="font-mono">{a.id}</span>
+                    last seen {timeAgo(a.last_seen)} · id{" "}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        navigator.clipboard
+                          .writeText(a.id)
+                          .then(() => showToast({ kind: "ok", text: "Agent id copied" }))
+                          .catch(() => showToast({ kind: "err", text: "Could not copy id" }))
+                      }
+                      className="font-mono hover:text-accent hover:underline"
+                      title="Copy agent id"
+                    >
+                      {a.id}
+                    </button>
                   </span>
                   {activityCount > 0 && (
                     <span
@@ -166,14 +178,14 @@ conflict://4
                     <span className="absolute inline-flex h-full w-full animate-pulse_dot rounded-full bg-success opacity-75" />
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
                   </span>
-                  <span className="text-[10px] uppercase tracking-widest text-text-dim">
+                  <span className="text-[11px] uppercase tracking-widest text-text-dim">
                     active now
                   </span>
                 </div>
               )}
               {!isActiveNow && isToday && (
                 <span
-                  className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-dim"
+                  className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-text-dim"
                   title={`last seen ${timeAgo(a.last_seen)}`}
                 >
                   <span className="inline-flex h-2 w-2 rounded-full bg-success/50" />
@@ -182,7 +194,7 @@ conflict://4
               )}
               {!isActiveNow && !isToday && (
                 <span
-                  className="text-[10px] uppercase tracking-widest text-text-dim"
+                  className="text-[11px] uppercase tracking-widest text-text-dim"
                   title={`last seen ${timeAgo(a.last_seen)}`}
                 >
                   {daysAgo === 1 ? "yesterday" : `${daysAgo}d ago`}

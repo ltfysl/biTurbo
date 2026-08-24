@@ -44,7 +44,7 @@ export function Sidebar() {
         <Logo />
         <div className="leading-tight">
           <div className="font-serif text-lg font-medium text-text">biTurbo</div>
-          <div className="text-[10px] uppercase tracking-widest text-text-dim">
+          <div className="text-[11px] uppercase tracking-widest text-text-dim">
             memory layer
           </div>
         </div>
@@ -79,7 +79,7 @@ export function Sidebar() {
 
         {/* Projects sub-list */}
         <div className="mt-6 px-3">
-          <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-widest text-text-dim">
+          <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-widest text-text-dim">
             <span>Projects</span>
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-text-dim">{totalProjects}</span>

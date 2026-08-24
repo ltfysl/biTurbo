@@ -265,7 +265,7 @@ export function Memories() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] uppercase tracking-widest text-text-dim">
+            <span className="text-[11px] uppercase tracking-widest text-text-dim">
               type
             </span>
             {TYPES.map((t) => {
@@ -290,7 +290,7 @@ export function Memories() {
 
             {visibleTagList.length > 0 && (
               <>
-                <span className="ml-2 text-[10px] uppercase tracking-widest text-text-dim">
+                <span className="ml-2 text-[11px] uppercase tracking-widest text-text-dim">
                   tag
                 </span>
                 {visibleTagList.map(([t, n]) => {
@@ -328,14 +328,14 @@ export function Memories() {
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                className="bg-transparent font-mono text-[10px] uppercase tracking-widest text-text-muted outline-none"
+                className="bg-transparent font-mono text-[11px] uppercase tracking-widest text-text-muted outline-none"
                 aria-label="Sort memories"
               >
                 <option value="newest">newest</option>
                 <option value="oldest">oldest</option>
                 <option value="importance">importance</option>
               </select>
-              <span className="text-[10px] uppercase tracking-widest text-text-dim" title="0 = include all, 1 = only highest importance">
+              <span className="text-[11px] uppercase tracking-widest text-text-dim" title="0 = include all, 1 = only highest importance">
                 min importance
               </span>
               <input

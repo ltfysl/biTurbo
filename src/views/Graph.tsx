@@ -63,8 +63,6 @@ export function Graph() {
   const [hover, setHover] = useState<string | null>(null);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
   const [posMap, setPosMap] = useState<Record<string, Pos>>({});
-  const [layoutMs, setLayoutMs] = useState<number | null>(null);
-  const [firstPaintMs, setFirstPaintMs] = useState<number | null>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 0.5 });
   const [busy, setBusy] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,14 +124,10 @@ export function Graph() {
   useEffect(() => {
     if (!data || data.nodes.length === 0) {
       setPosMap({});
-      setLayoutMs(null);
       return;
     }
-    const tSeed = performance.now();
     const seed = computeSeedPositions(data.nodes);
     setPosMap(seed);
-    setLayoutMs(Math.round(performance.now() - tSeed));
-    setFirstPaintMs(null);
 
     const reqId = ++layoutReqSeq.current;
     const reqNodes = data.nodes.map((n) => ({
@@ -162,7 +156,6 @@ export function Graph() {
           : (raw as Record<string, Pos>);
         setPosMap(posMapFromWorker);
         if (m.type === "result") {
-          setLayoutMs(Math.round(m.elapsedMs));
           send(
             "info",
             `[graph] layout refined · ${m.iterationsDone} iters · ${Math.round(m.elapsedMs)}ms`,
@@ -200,22 +193,11 @@ export function Graph() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const t0 = performance.now();
     drawScene(ctx, size, data, posMap, view, hover, query);
-    const t1 = performance.now();
-    if (firstPaintMs === null) {
-      setFirstPaintMs(Math.round(t1 - t0));
-      send(
-        "info",
-        `[graph] first paint · ${Math.round(t1 - t0)}ms · ${data?.nodes.length ?? 0} nodes`,
-      );
-    }
-  }, [size, data, posMap, view, hover, query, firstPaintMs]);
+  }, [size, data, posMap, view, hover, query]);
 
 
   async function reload() {
-    setFirstPaintMs(null);
-    setLayoutMs(null);
     setBusy(true);
     try {
       await refreshGraph();
@@ -271,6 +253,27 @@ export function Graph() {
       const wy = (my - v.y) / v.k;
       return { k, x: mx - wx * k, y: my - wy * k };
     });
+  }
+  function onKeyDown(e: React.KeyboardEvent) {
+    const step = 50 / view.k;
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      e.preventDefault();
+      setView((v) => {
+        let dx = 0;
+        let dy = 0;
+        if (e.key === "ArrowLeft") dx = -step;
+        if (e.key === "ArrowRight") dx = step;
+        if (e.key === "ArrowUp") dy = -step;
+        if (e.key === "ArrowDown") dy = step;
+        return { ...v, x: v.x + dx, y: v.y + dy };
+      });
+    } else if (e.key === "=" || e.key === "+" || e.key === "NumpadAdd") {
+      e.preventDefault();
+      setView((v) => ({ ...v, k: Math.max(0.1, Math.min(4, v.k * 1.2)) }));
+    } else if (e.key === "-" || e.key === "NumpadSubtract") {
+      e.preventDefault();
+      setView((v) => ({ ...v, k: Math.max(0.1, Math.min(4, v.k / 1.2)) }));
+    }
   }
 
   function fitToView() {
@@ -352,8 +355,12 @@ export function Graph() {
     const uid = hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (!uid || !data) return;
     const n = data.nodes.find((x) => x.uid === uid);
-    if (n && n.kind !== "file" && n.file_path) {
-      setSelected(n.uid);
+    if (n && n.file_path) {
+      if (n.kind === "file") {
+        showToast({ kind: "info", text: "File nodes group symbols — click a function" });
+      } else {
+        setSelected(n.uid);
+      }
     }
   }
 
@@ -415,6 +422,10 @@ export function Graph() {
         <canvas
           ref={canvasRef}
           className="absolute inset-0 cursor-grab active:cursor-grabbing"
+          tabIndex={0}
+          role="img"
+          aria-label="Graph of code symbols — arrow keys pan, plus/minus zoom"
+          onKeyDown={onKeyDown}
           onWheel={onWheel}
           onMouseDown={onMouseDown}
           onMouseMove={(e) => {
@@ -456,7 +467,7 @@ export function Graph() {
                 className="h-2 w-2 rounded-full"
                 style={{ background: KIND_COLORS[hoverNode.kind as NodeKind]?.fill }}
               />
-              <span className="text-[10px] uppercase tracking-widest text-text-dim">
+              <span className="text-[11px] uppercase tracking-widest text-text-dim">
                 {hoverNode.kind}
               </span>
             </div>
@@ -481,16 +492,6 @@ export function Graph() {
             <span className="font-mono text-[10px] text-text-dim">
               · {data?.nodes.length ?? 0} nodes · {data?.edges.length ?? 0} edges
             </span>
-            {layoutMs !== null && (
-              <span className="font-mono text-[10px] text-success">
-                · layout {layoutMs}ms
-              </span>
-            )}
-            {firstPaintMs !== null && (
-              <span className="font-mono text-[10px] text-success">
-                · paint {firstPaintMs}ms
-              </span>
-            )}
             <div className="flex-1" />
             <div className="relative">
               <Search
@@ -547,7 +548,7 @@ export function Graph() {
         <div className="mb-4">
           <div className="mb-2 flex items-center gap-2 text-text-muted">
             <Filter size={12} />
-            <span className="text-[10px] uppercase tracking-widest">Node kinds</span>
+            <span className="text-[11px] uppercase tracking-widest">Node kinds</span>
           </div>
           <div className="space-y-1.5">
             {NODE_KINDS.map((k) => (
@@ -580,7 +581,7 @@ export function Graph() {
         </div>
 
         <div className="mb-4">
-          <div className="mb-2 text-[10px] uppercase tracking-widest text-text-muted">
+          <div className="mb-2 text-[11px] uppercase tracking-widest text-text-muted">
             Edge types
           </div>
           <div className="space-y-1">
@@ -622,7 +623,7 @@ export function Graph() {
                 className="h-2 w-2 rounded-full"
                 style={{ background: KIND_COLORS[hoverNode.kind as NodeKind]?.fill }}
               />
-              <span className="text-[10px] uppercase tracking-widest text-text-dim">
+              <span className="text-[11px] uppercase tracking-widest text-text-dim">
                 {hoverNode.kind}
               </span>
             </div>

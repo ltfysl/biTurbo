@@ -156,7 +156,7 @@ export const MemoryCard = memo(function MemoryCard({
         <div className="ml-auto flex items-center gap-2">
           {explanation && (
             <span
-              className="font-mono text-[9px] text-text-dim"
+              className="font-mono text-[11px] text-text-dim"
               title={`Matched: ${explanation.matched_terms.join(", ") || "semantic only"}`}
             >
               {explanation.vector_rank ? `v#${explanation.vector_rank}` : ""}

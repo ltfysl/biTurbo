@@ -328,7 +328,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
         {/* Type selector in edit mode (#47) */}
         {editing && (
           <div className="mt-4">
-            <div className="mb-1.5 text-[10px] uppercase tracking-widest text-text-dim">
+            <div className="mb-1.5 text-[11px] uppercase tracking-widest text-text-dim">
               Type
             </div>
             <select
@@ -345,7 +345,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
         {/* Tags */}
         <div className="mt-4">
-          <div className="mb-1.5 text-[10px] uppercase tracking-widest text-text-dim">
+          <div className="mb-1.5 text-[11px] uppercase tracking-widest text-text-dim">
             Tags
           </div>
           {editing ? (
@@ -372,7 +372,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
         {/* Importance slider */}
         <div className="mt-4">
-          <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-widest text-text-dim">
+          <div className="mb-1.5 flex items-center justify-between text-[11px] uppercase tracking-widest text-text-dim">
             <span>Importance</span>
             <span className="font-mono text-text-muted">
               {editing ? draftImp.toFixed(2) : memory.importance.toFixed(2)}
@@ -406,7 +406,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
         {/* Supersession chain (#45) */}
         {(memory.superseded_by != null || memory.supersedes != null) && (
           <div className="mt-5 border-t border-border-subtle pt-4">
-            <div className="mb-2 text-[10px] uppercase tracking-widest text-text-dim">
+            <div className="mb-2 text-[11px] uppercase tracking-widest text-text-dim">
               Supersession
             </div>
             <div className="flex flex-wrap gap-2">
@@ -449,7 +449,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
         {/* Related */}
         {related.length > 0 && (
           <div className="mt-5 border-t border-border-subtle pt-4">
-            <div className="mb-2 text-[10px] uppercase tracking-widest text-text-dim">
+            <div className="mb-2 text-[11px] uppercase tracking-widest text-text-dim">
               Related
             </div>
             <div className="space-y-1.5">
@@ -483,12 +483,12 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
         {editing ? (
           <>
             {dirty && !conflict && (
-              <span className="text-[10px] uppercase tracking-widest text-warning">
+              <span className="text-[11px] uppercase tracking-widest text-warning">
                 Unsaved
               </span>
             )}
             {conflict && (
-              <span className="text-[10px] uppercase tracking-widest text-warning">
+              <span className="text-[11px] uppercase tracking-widest text-warning">
                 Out of date
               </span>
             )}
@@ -525,7 +525,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 function Meta({ label, value, mono, title }: { label: string; value: string; mono?: boolean; title?: string }) {
   return (
     <div title={title}>
-      <div className="text-[10px] uppercase tracking-widest text-text-dim">
+      <div className="text-[11px] uppercase tracking-widest text-text-dim">
         {label}
       </div>
       <div className={clsx("mt-0.5 text-text-muted", mono && "font-mono")}>

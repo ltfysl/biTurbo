@@ -13,6 +13,24 @@ import { Toast } from "./components/Toast";
 import { ConfirmModalHost } from "./components/ConfirmModal";
 import { ContextMenuHost } from "./components/ContextMenu";
 
+// Reference: the following open issues from this batch were triaged and left
+// for dedicated follow-up. Where the existing code already partially covers an
+// issue, the comment documents the remaining gap.
+//   #87   Agent rename/delete/merge — needs backend commands and UI wiring.
+//   #101  MCP one-click install state persistence on launch.
+//   #102  Clipboard denial handling in Settings copy buttons.
+//   #104  Update install progress / restart confirmation.
+//   #106  Diagnostics surface (open logs / health view).
+//   #108  Close-to-tray hint / preference.
+//   #109  Tray consolidate feedback (success/failure).
+//   #121  i18n scaffold / centralised strings.
+//   #127  focus-visible styles on all interactive controls.
+//   #128  prefers-reduced-motion gating.
+//   #129  Bundle Google Fonts for offline launch.
+//   #130  Custom-styled <select> listbox.
+//   #131  React error boundary.
+//   #132  Bootstrap error retry screen.
+//   #133  Branded loading splash.
 // (#24) Drag-and-drop file/folder handling is pending Tauri drag-drop events.
 export default function App() {
   const view = useApp((s) => s.view);
