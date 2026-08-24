@@ -177,9 +177,15 @@ struct PendingChunk {
 
 impl PendingChunk {
     fn embed_text(&self) -> String {
+        let mut code = self.code.clone();
+        let mut end_line = self.end_line;
+        if code.len() > MAX_CHUNK_TEXT {
+            code = code.chars().take(MAX_CHUNK_TEXT).collect();
+            end_line = self.start_line + code.matches('\n').count() as i64;
+        }
         let mut text = format!(
             "```{}\n// {}:{}-{}\n{}```\n{}",
-            self.language, self.file_path, self.start_line, self.end_line, self.code, self.language,
+            self.language, self.file_path, self.start_line, end_line, code, self.language,
         );
         if text.len() > MAX_CHUNK_TEXT {
             text = text.chars().take(MAX_CHUNK_TEXT).collect();
@@ -188,14 +194,13 @@ impl PendingChunk {
     }
 
     fn db_content(&self) -> String {
-        let mut text = format!(
-            "// {}:{}-{}\n{}",
-            self.file_path, self.start_line, self.end_line, self.code,
-        );
-        if text.len() > MAX_CHUNK_TEXT {
-            text = text.chars().take(MAX_CHUNK_TEXT).collect();
+        let mut code = self.code.clone();
+        let mut end_line = self.end_line;
+        if code.len() > MAX_CHUNK_TEXT {
+            code = code.chars().take(MAX_CHUNK_TEXT).collect();
+            end_line = self.start_line + code.matches('\n').count() as i64;
         }
-        text
+        format!("// {}:{}-{}\n{}", self.file_path, self.start_line, end_line, code)
     }
 }
 
