@@ -56,22 +56,24 @@ export function Sidebar() {
           const Icon = item.icon;
           const active = view === item.id;
           return (
-            <button
-              key={item.id}
-              onClick={() => setView(item.id as never)}
-              className={clsx(
-                "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition",
-                active
-                  ? "bg-accent-soft text-text"
-                  : "text-text-muted hover:bg-surface-2 hover:text-text"
-              )}
-            >
-              <Icon
-                size={15}
-                className={active ? "text-accent" : "text-text-dim"}
-              />
-              <span className="flex-1 text-left">{item.label}</span>
-            </button>
+          <button
+            key={item.id}
+            onClick={() => setView(item.id as never)}
+            aria-current={active ? "page" : undefined}
+            title={item.label}
+            className={clsx(
+              "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm transition",
+              active
+                ? "bg-accent-soft text-text"
+                : "text-text-muted hover:bg-surface-2 hover:text-text"
+            )}
+          >
+            <Icon
+              size={15}
+              className={active ? "text-accent" : "text-text-dim"}
+            />
+            <span className="flex-1 text-left">{item.label}</span>
+          </button>
           );
         })}
 
@@ -239,7 +241,7 @@ function ProjectList() {
               )}
             />
             <span className="flex-1 truncate">{p.name}</span>
-            <span className="font-mono text-[10px] text-text-dim">
+            <span className="font-mono text-[11px] text-text-dim">
               {p.memory_count}
             </span>
           </button>

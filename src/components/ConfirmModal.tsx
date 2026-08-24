@@ -107,7 +107,7 @@ function ConfirmModal({
   return (
     <div
       ref={dialogRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 animate-backdrop_in backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center backdrop p-4 animate-backdrop_in backdrop-blur-sm"
       onMouseDown={(e) => {
         // Backdrop click cancels.
         if (e.target === e.currentTarget) onCancel();

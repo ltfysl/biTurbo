@@ -32,7 +32,7 @@ export function Agents() {
     try {
       await refreshAgents();
     } catch (e) {
-      showToast({ kind: "err", text: String(e) });
+      showToast({ kind: "err", text: friendlyError(e) });
     } finally {
       setRefreshing(false);
     }

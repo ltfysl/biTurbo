@@ -11,6 +11,7 @@ import { Kbd } from "../lib/kbd";
 // (#58) Importance defaults to 0.6 with a clear numeric readout.
 // (#59) Backdrop and Escape close are ignored while a save is in flight.
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
+const MAX_CHARS = 10000;
 
 export function QuickAdd() {
   const open = useApp((s) => s.quickAddOpen);
@@ -83,7 +84,7 @@ export function QuickAdd() {
 
   if (!open) return null;
 
-  async function submit() {
+  async function submit(keepOpen = false) {
     if (!content.trim() || busy) return;
     setBusy(true);
     try {
@@ -106,7 +107,12 @@ export function QuickAdd() {
       setType("fact");
       setFilePath("");
       setStartLine("");
-      setOpen(false);
+      if (!keepOpen) {
+        setOpen(false);
+      } else {
+        showToast({ kind: "ok", text: "Remembered · ready for the next" });
+        window.setTimeout(() => textareaRef.current?.focus(), 0);
+      }
       showToast({ kind: "ok", text: "Remembered" });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
@@ -120,7 +126,7 @@ export function QuickAdd() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-[10vh] backdrop-blur-sm animate-fade_in"
+      className="fixed inset-0 z-50 flex items-start justify-center backdrop px-4 pt-[10vh] backdrop-blur-sm animate-fade_in"
 // (#522) Backdrop click only closes when there is no draft and nothing in flight.
       onClick={() => {
         // Ignore backdrop clicks while the save is in flight or when the
@@ -154,29 +160,41 @@ export function QuickAdd() {
             onChange={(e) => setContent(e.target.value)}
             placeholder="What should the agents remember?"
             rows={4}
+            maxLength={MAX_CHARS}
             className="input resize-none text-sm"
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                void submit();
+              } else if (e.altKey && e.key === "Enter") {
+                e.preventDefault();
+                void submit(true);
+              }
             }}
           />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap gap-1">
-              {TYPES.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setType(t)}
-                  className={clsx(
-                    "rounded-full px-2.5 py-0.5 text-xs transition",
-                    type === t
-                      ? "bg-accent text-bg"
-                      : "border border-border bg-surface-2 text-text-muted hover:text-text"
-                  )}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
+          <div
+            className="flex flex-wrap gap-1"
+            role="group"
+            aria-label="Memory type"
+          >
+            {TYPES.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setType(t)}
+                aria-pressed={type === t}
+                className={clsx(
+                  "rounded-full px-2.5 py-0.5 text-xs transition",
+                  type === t
+                    ? "bg-accent text-bg"
+                    : "border border-border bg-surface-2 text-text-muted hover:text-text"
+                )}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
             {type === "code" && (
               <div className="flex w-full items-center gap-2">
                 <input
@@ -217,6 +235,7 @@ export function QuickAdd() {
                   step="0.05"
                   value={importance}
                   onChange={(e) => setImportance(parseFloat(e.target.value))}
+                  aria-label="Importance 0 to 1"
                   className="w-20 accent-accent"
                 />
                 <span className="w-7 text-right font-mono text-[10px] text-text-muted">
@@ -224,13 +243,13 @@ export function QuickAdd() {
                 </span>
               </div>
             </div>
-          </div>
         </div>
-
         <div className="flex items-center justify-between border-t border-border-subtle px-4 py-3">
-          <div className="flex items-center gap-2 font-mono text-[10px] text-text-dim">
-            <span>{content.length} chars</span>
-            <span>·</span>
+          <div className="flex items-center gap-2 font-mono text-[10px]">
+            <span className={content.length > MAX_CHARS * 0.9 ? "text-danger" : "text-text-dim"}>
+              {content.length} / {MAX_CHARS}
+            </span>
+            <span className="text-text-dim">·</span>
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
@@ -247,7 +266,7 @@ export function QuickAdd() {
           <div className="flex items-center gap-2">
             <Kbd combo="mod+return" />
             <button
-              onClick={submit}
+              onClick={() => { void submit(); }}
               disabled={!content.trim() || busy}
               className="btn-primary"
             >

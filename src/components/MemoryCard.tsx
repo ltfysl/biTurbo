@@ -87,9 +87,10 @@ export const MemoryCard = memo(function MemoryCard({
       <div className="mb-2 flex items-center gap-2">
         <span
           className={clsx(
-            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ring-1",
             meta.bg,
-            meta.color
+            meta.color,
+            meta.ring
           )}
         >
           <span className={clsx("h-1 w-1 rounded-full", meta.dot)} />

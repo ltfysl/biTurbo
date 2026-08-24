@@ -15,7 +15,7 @@
         "title": "biTurbo — Memory Layer",
         "width": 1280,
         "height": 820,
-        "minWidth": 960,
+        "minWidth": 1024,
         "minHeight": 600,
         "resizable": true,
         "decorations": true,

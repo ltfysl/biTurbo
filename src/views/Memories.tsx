@@ -273,6 +273,8 @@ export function Memories() {
               return (
                 <button
                   key={t}
+                  type="button"
+                  aria-pressed={active}
                   onClick={() => toggleType(t)}
                   className={clsx(
                     "rounded-full px-2.5 py-0.5 text-xs capitalize transition",
@@ -295,13 +297,15 @@ export function Memories() {
                   const active = activeTags.has(t);
                   return (
                     <button
-                      key={t}
-                      onClick={() => toggleTag(t)}
+                  key={t}
+                  type="button"
+                  onClick={() => toggleTag(t)}
+                  aria-pressed={active}
                       title={`${n} memories`}
                       className={clsx(
                         "rounded-full px-2.5 py-0.5 text-xs transition",
                         active
-                          ? "bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40"
+                          ? "bg-accent/15 text-accent ring-1 ring-accent/40"
                           : "border border-border bg-surface-2 text-text-muted hover:text-text"
                       )}
                     >
@@ -343,6 +347,7 @@ export function Memories() {
                 onChange={(e) => setMinImportance(parseFloat(e.target.value))}
                 onDoubleClick={() => setMinImportance(0)}
                 title="0 = include all, 1 = only highest importance (double-click to reset)"
+                aria-label="Minimum importance"
                 className="w-24 accent-accent"
               />
               <span className="w-7 text-right font-mono text-[10px] text-text-muted">
@@ -482,7 +487,7 @@ export function Memories() {
             const total = stats?.by_project?.find(([id]) => id === currentProjectId)?.[1] ?? visible.length;
             return `Showing ${visible.length} of ${total} ${visible.length === 1 ? "memory" : "memories"}`;
           })()}
-          {query && results.length > 0 && ` · semantic search · k=${results.length}`}
+          {query && results.length > 0 && ` · top ${results.length} matches${results.length === 50 ? " (truncated)" : ""}`}
         </div>
       </div>
 

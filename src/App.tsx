@@ -63,7 +63,13 @@ export default function App() {
         useApp.getState().setQuickAddOpen(true);
       } else if (meta && e.key === "/") {
         e.preventDefault();
-        document.getElementById("global-search")?.focus();
+        const st = useApp.getState();
+        if (st.view !== "memories") {
+          st.setView("memories");
+        }
+        window.setTimeout(() => {
+          document.getElementById("global-search")?.focus();
+        }, 0);
       } else if (e.key === "Escape") {
         useApp.getState().setQuickAddOpen(false);
       } else if (!editing && !meta && !e.altKey && e.key >= "1" && e.key <= "6") {
