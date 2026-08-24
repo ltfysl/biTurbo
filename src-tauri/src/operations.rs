@@ -28,8 +28,8 @@ pub struct Operation {
     pub finished_at: Option<i64>,
 }
 
-/// Spawn an operation executor thread. A failed spawn must never leave the
-/// operation queued forever with nobody running it (#417).
+/// Spawn an operation executor thread. A failed spawn must fail the
+/// operation instead of orphaning it as 'queued' forever (#417).
 fn spawn_executor_thread<F>(state: &AppState, id: &str, name: String, body: F) -> BiResult<()>
 where
     F: FnOnce() + Send + 'static,
