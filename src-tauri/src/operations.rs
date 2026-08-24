@@ -137,6 +137,16 @@ pub fn update_progress(
 ) -> BiResult<()> {
     let now = chrono::Utc::now().timestamp_millis();
     let checkpoint = checkpoint.map(serde_json::Value::to_string);
+    // Throttle DB writes and event emissions to at most one per 250 ms unless
+    // the phase or progress changed (#429).
+    if let Ok(last) = get(state, id) {
+        let same_phase = last.phase.as_deref() == Some(phase);
+        let same_progress =
+            last.current as usize == current && last.total as usize == total;
+        if now - last.updated_at < 250 && same_phase && same_progress {
+            return Ok(());
+        }
+    }
     state.db.write(|tx| {
         // The status predicate makes a late tick after a terminal state a no-op.
         tx.execute(
