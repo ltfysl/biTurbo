@@ -424,16 +424,13 @@ pub fn ingest_project_controlled(
     let mut stale_uids = Vec::new();
     // Only ingest-minted chunk uids (`{project}::{rel}::S-E`) go stale on a
     // changed/deleted file (#527); user-created code-type memories that merely
-    // share the file_path must survive.
-    for rel in &changed_rels {
-        stale_uids.extend(chunk_uids_for_rel(&conn, project_id, rel)?);
-    }
-    for rel in existing_files
+    stale_uids.extend(chunk_uids_for_rels(&conn, project_id, &changed_rels)?);
+    let stale_deleted_rels: Vec<String> = existing_files
         .keys()
         .filter(|rel| !current_rels.contains(*rel))
-    {
-        stale_uids.extend(chunk_uids_for_rel(&conn, project_id, rel)?);
-    }
+        .cloned()
+        .collect();
+    stale_uids.extend(chunk_uids_for_rels(&conn, project_id, &stale_deleted_rels)?);
     drop(conn);
 
     pending_chunks.extend(changed_pfs.iter().flat_map(|pf| pf.chunks.iter()));
@@ -669,29 +666,40 @@ fn is_vcs_meta_dir(entry: &ignore::DirEntry) -> bool {
 /// never user-created `code` memories that merely share the file_path (#527).
 /// NOTE: validating/clamping start_line/end_line on user remembers lives in
 /// memory::remember — TODO(other-slice).
-fn chunk_uids_for_rel(
+fn chunk_uids_for_rels(
     conn: &rusqlite::Connection,
     project_id: &str,
-    rel: &str,
+    rels: &[String],
 ) -> BiResult<Vec<String>> {
-    let prefix = format!("{project_id}::{rel}::");
-    let pattern = format!(
-        "{}%",
-        prefix
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
-    let mut stmt = conn.prepare(
-        "SELECT uid FROM memories
-         WHERE project_id = ?1 AND mem_type = 'code' AND uid LIKE ?2 ESCAPE '\\'",
-    )?;
-    let rows = stmt.query_map(rusqlite::params![project_id, pattern], |r| {
-        r.get::<_, String>(0)
-    })?;
+    if rels.is_empty() {
+        return Ok(Vec::new());
+    }
+    const BATCH: usize = 50;
     let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
+    for group in rels.chunks(BATCH) {
+        let mut conditions = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+        params.push(project_id.to_string());
+        for rel in group {
+            let prefix = format!("{project_id}::{rel}::");
+            let pattern = format!(
+                "{}%",
+                prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+            );
+            conditions.push(format!("uid LIKE ?{} ESCAPE '\\'", params.len() + 1));
+            params.push(pattern);
+        }
+        let sql = format!(
+            "SELECT uid FROM memories WHERE project_id = ?1 AND mem_type = 'code' AND ({})",
+            conditions.join(" OR ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        for row in rows {
+            out.push(row?);
+        }
     }
     Ok(out)
 }
