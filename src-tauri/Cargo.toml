@@ -7,6 +7,13 @@ edition = "2021"
 rust-version = "1.90"
 default-run = "biturbo"
 
+# Build / CI / distribution references:
+# Issue #365: package managers (homebrew / winget / AUR / cargo).
+# Issue #367: npm `npx biturbo-mcp` wrapper package.
+# Issue #370: `biturbo-cli` shell companion binary.
+# Issue #371: clap_complete + clap_mangen for CLI completions/man pages.
+# Issue #372: `biturbo-mcp serve` long-running HTTP / systemd mode.
+
 [[bin]]
 name = "biturbo"
 path = "src/main.rs"
