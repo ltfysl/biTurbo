@@ -551,6 +551,7 @@ async function main() {
     if (missingRequired.length > 0) {
       throw new Error(`missing required tools: ${missingRequired.join(", ")}`);
     }
+    // (#536) Missing required tools are now hard failures; the harness no longer exits 0 on skipped coverage.
     console.log(`${COL.dim}discovered ${tools.length} tools${COL.reset}\n`);
 
     for (const t of tests) {
