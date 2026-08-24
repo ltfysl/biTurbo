@@ -16,6 +16,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ConfirmOptions } from "../components/ConfirmModal";
 import type { ContextMenuItem } from "../components/ContextMenu";
 
+// (#296) startIngest/cancelIngest removed from the store; views call ingest APIs directly.
 export type View = "overview" | "memories" | "projects" | "graph" | "agents" | "settings";
 export type Theme = "dark" | "light" | "system";
 

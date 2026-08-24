@@ -41,6 +41,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const confirm = useConfirm();
   const projects = useApp((s) => s.projects);
 
+  // (#171) Per-uid draft cache preserves unsaved changes when switching memories.
   useEffect(() => {
     baselineCache.current.set(memory.uid, {
       content: memory.content,
@@ -228,6 +229,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
+        {/* (#123) Type badge applies ring, bg, and color from MEM_TYPE_META. */}
       <div className="flex items-start gap-2 border-b border-border-subtle p-4">
         <div className="flex-1">
           <div className="mb-1 flex items-center gap-2">

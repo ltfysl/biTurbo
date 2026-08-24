@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-// Self-hosted fonts (#23, #513) — must load before app styles.
+// Self-hosted fonts (#23, #129, #513) — must load before app styles.
 import "@fontsource/fraunces/300.css";
 import "@fontsource/fraunces/400.css";
 import "@fontsource/fraunces/500.css";

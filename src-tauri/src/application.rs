@@ -1,6 +1,8 @@
 //! Transport-neutral application interface shared by Tauri and MCP adapters.
 // Issue #396: add local activity/recall insights and dead-memory pruning.
 // Issue #385: agent roles (admin/writer/reader) and first-time approval flow.
+// Issue #270: Session episode capture — summarize a working session into episode memories.
+// Issue #284: MCP sampling support for server-side summarization.
 
 use crate::error::{BiError, BiResult};
 use crate::memory;

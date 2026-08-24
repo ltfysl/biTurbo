@@ -230,6 +230,7 @@ export function Memories() {
   // (#354) Tag list with counts and show-all toggle; full tag browser with drill-down and co-occurrence pending.
   const [showAllTags, setShowAllTags] = useState(false);
   const visibleTagList = showAllTags ? tags : tags.slice(0, 20);
+// (#126) Active tag chips use accent tokens instead of raw violet.
 
   return (
     <div className="flex h-full">

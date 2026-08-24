@@ -9,6 +9,10 @@
 //! code_index — tree-sitter chunks per project (file:range → memory)
 
 // Issue #380: scheduled pruning of activity, recall_events, feedback, operations, applied mutations.
+// Issue #257: Typed memory links (related / caused-by / derived-from / supports).
+// Issue #266: TTL & archive policies per memory type.
+// Issue #271: Confidence field + provenance chain on memories.
+// Issue #275: Zero-hit query analytics and gap report.
 
 use crate::error::BiResult;
 use parking_lot::Mutex;

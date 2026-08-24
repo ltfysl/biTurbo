@@ -1,3 +1,4 @@
+// Issue #293: Typed MCP error codes.
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

@@ -2,6 +2,7 @@
 //! the projects table. The "default" project is auto-created on first run.
 // Issue #389: per-project scratchpad (LWW key-value working memory, excluded from search).
 // Issue #387: project templates for rust-service / nextjs-app / python-lib onboarding.
+// Issue #298: diff_projects — compare memory sets between projects.
 
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};

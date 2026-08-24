@@ -18,7 +18,10 @@ import {
   Loader2,
   RefreshCw,
   ArrowUpCircle,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -44,6 +47,7 @@ export function Settings() {
   const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; available: boolean } | null>(null);
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [devOpen, setDevOpen] = useState(false);
 
   useEffect(() => {
     isEnabled()
@@ -201,6 +205,7 @@ ${end}`;
     }
   }
 
+  // (#282) Clipboard failures are caught and surfaced with a toast.
   function copy(label: string, text: string) {
     navigator.clipboard
       .writeText(text)
@@ -282,6 +287,18 @@ ${end}`;
     }
   }
 }`;
+  // (#287) Sticky in-page section navigation.
+  const sectionNav = [
+    { id: "data-location", label: "Data" },
+    { id: "diagnostics", label: "Diagnostics" },
+    { id: "system-tray", label: "Tray" },
+    { id: "launch-on-startup", label: "Startup" },
+    { id: "appearance", label: "Appearance" },
+    { id: "embedding-model", label: "Model" },
+    { id: "mcp-server", label: "MCP" },
+    { id: "updates", label: "Updates" },
+    { id: "developer", label: "Developer" },
+  ];
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 p-8 animate-fade_in">
@@ -291,6 +308,21 @@ ${end}`;
           Local data, MCP integration, and the embedding model.
         </p>
       </div>
+      {/* (#287) Sticky in-page section navigation. */}
+      <nav className="sticky top-0 -mx-8 -mt-8 mb-6 flex flex-wrap gap-2 border-b border-border-subtle bg-bg/90 px-8 py-3 backdrop-blur-sm z-10">
+        {sectionNav.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => {
+              document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className="btn-ghost text-xs"
+          >
+            {s.label}
+          </button>
+        ))}
+      </nav>
 
       <Section icon={Folder} title="Data location">
         <p className="text-sm text-text-muted">
@@ -566,11 +598,11 @@ Theme: ${theme}`;
             })}
           </div>
         </div>
-
+        {/* (#292) Repo-relative file references removed from user-facing copy. */}
         <p className="mt-3 text-sm text-text-muted">
           Once connected, your agent has 27 tools (search, remember, forget, ingest_project,
-          consolidate, list_projects, …). See <span className="kbd">INSTRUCTIONS.md</span> in the
-          project root for the full tool reference and usage rules.
+          consolidate, list_projects, …). See the project docs for the full tool reference
+          and troubleshooting.
         </p>
       </Section>
 
@@ -639,53 +671,78 @@ Theme: ${theme}`;
         )}
       </Section>
 
-      <Section icon={FileCode2} title="Agent rule blocks">
+      <Section icon={Terminal} title="Developer">
         <p className="text-sm text-text-muted">
-          Drop these into <span className="kbd">AGENTS.md</span>,{" "}
-          <span className="kbd">CLAUDE.md</span>,{" "}
-          <span className="kbd">.cursorrules</span>, or whatever your agent reads on
-          startup. They'll wire your agent into biTurbo with the right MCP tool surface and
-          behavior rules.
+          Advanced tooling for agent integration. Most users don't need this.
         </p>
+        <button
+          type="button"
+          onClick={() => setDevOpen((v) => !v)}
+          className="mt-3 inline-flex items-center gap-2 text-xs btn-ghost"
+        >
+          {devOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          {devOpen ? "Hide developer content" : "Show developer content"}
+        </button>
 
-        <div className="mt-4">
-          <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
-            Project for the rule block
-          </label>
-          <select
-            value={ruleProjectId ?? currentProjectId}
-            onChange={(e) => setRuleProjectId(e.target.value)}
-            className="input w-64"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.id})
-              </option>
-            ))}
-          </select>
-        </div>
+        {devOpen && (
+          <div className="mt-4 space-y-6">
+            <div>
+              <p className="text-sm text-text-muted">
+                Full tool reference and troubleshooting are in the project docs.
+              </p>
+            </div>
 
-        <div className="mt-4 space-y-4">
-          <RuleBlock
-          label={`project · ${ruleProjectName}`}
-            text={projectRule}
-            copied={copied === "project"}
-            onCopy={() => copy("project rule", projectRule)}
-            hint={
-              projects.some((p) => p.id === (ruleProjectId ?? currentProjectId))
-                ? `Paste in the root of your ${ruleProjectId ?? currentProjectId} repo.`
-                : "No active project — defaults to your current selection."
-            }
-          />
+            <div>
+              <h4 className="mb-1 font-serif text-text">Agent rule blocks</h4>
+              <p className="text-sm text-text-muted">
+                Drop these into <span className="kbd">AGENTS.md</span>,{" "}
+                <span className="kbd">CLUADE.md</span>,{" "}
+                <span className="kbd">.cursorrules</span>, or whatever your agent reads on
+                startup. They'll wire your agent into biTurbo with the right MCP tool surface and
+                behavior rules.
+              </p>
 
-          <RuleBlock
-            label="global"
-            text={globalRule}
-            copied={copied === "global"}
-            onCopy={() => copy("global rule", globalRule)}
-            hint="Paste in your home AGENTS.md or wherever your agent reads cross-project rules."
-          />
-        </div>
+              <div className="mt-4">
+                <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
+                  Project for the rule block
+                </label>
+                <select
+                  value={ruleProjectId ?? currentProjectId}
+                  onChange={(e) => setRuleProjectId(e.target.value)}
+                  className="input w-64"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <RuleBlock
+                  label={`project · ${ruleProjectName}`}
+                  text={projectRule}
+                  copied={copied === "project"}
+                  onCopy={() => copy("project rule", projectRule)}
+                  hint={
+                    projects.some((p) => p.id === (ruleProjectId ?? currentProjectId))
+                      ? `Paste in the root of your ${ruleProjectId ?? currentProjectId} repo.`
+                      : "No active project — defaults to your current selection."
+                  }
+                />
+
+                <RuleBlock
+                  label="global"
+                  text={globalRule}
+                  copied={copied === "global"}
+                  onCopy={() => copy("global rule", globalRule)}
+                  hint="Paste in your home AGENTS.md or wherever your agent reads cross-project rules."
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </Section>
     </div>
   );
@@ -696,12 +753,13 @@ function Section({
   title,
   children,
 }: {
-  icon: import("lucide-react").LucideIcon;
+  icon: LucideIcon;
   title: string;
   children: React.ReactNode;
 }) {
+  const id = title.toLowerCase().replace(/\s+/g, "-");
   return (
-    <div className="card p-5">
+    <div id={id} className="card p-5">
       <div className="mb-3 flex items-center gap-2 text-text-muted">
         <Icon size={14} className="text-accent" />
         <h3 className="font-serif text-lg text-text">{title}</h3>

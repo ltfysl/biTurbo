@@ -1,6 +1,11 @@
 // Issue #379: maintain a project_tags counter table; optimize list_tags.
 // Issue #378: replace OFFSET pagination with (created_at, id) keyset cursors.
 // Issue #388: per-project duplicate_policy: allow/warn/supersede/reject.
+// Issue #256: Procedural memory type for agent behavior rules.
+// Issue #257: Typed memory links (related / caused-by / derived-from / supports).
+// Issue #271: Confidence field + provenance chain on memories.
+// Issue #276: Memory templates (ADR-style decision records).
+// Issue #297: batch_remember — bulk memory writes in one call.
 
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
