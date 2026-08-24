@@ -121,6 +121,7 @@ export function ingestPhaseLabel(phase: string): string {
   return INGEST_PHASE_LABELS[phase] ?? phase;
 }
 
+// (#15) Map backend/IPC errors to short, human-facing toast text via friendlyError().
 /**
  * Human-facing error text for toasts: strips backend error prefixes,
  * collapses multi-line IPC dumps to the first line, and caps length.

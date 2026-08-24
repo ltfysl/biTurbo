@@ -8,6 +8,7 @@ import {
   Check,
   Trash2,
   FileSearch,
+  Plus,
 } from "lucide-react";
 import { useApp, useConfirm, useContextMenu } from "../lib/store";
 import { api } from "../lib/api";
@@ -78,9 +79,17 @@ export function Sidebar() {
         <div className="mt-6 px-3">
           <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-widest text-text-dim">
             <span>Projects</span>
-            <span className="font-mono text-text-dim">
-              {totalProjects}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-text-dim">{totalProjects}</span>
+              <button
+                onClick={() => setView("projects")}
+                className="rounded p-0.5 text-text-dim hover:bg-surface-2 hover:text-text"
+                title="New project"
+                aria-label="New project"
+              >
+                <Plus size={12} />
+              </button>
+            </div>
           </div>
           <ProjectList />
         </div>
@@ -90,7 +99,7 @@ export function Sidebar() {
       <div className="border-t border-border-subtle p-3">
         <div className="flex items-center gap-2 rounded-md bg-surface-2 px-3 py-2">
           <span className="relative flex h-2 w-2">
-            {/* Static status dot — infinite CSS pulse keeps WebKit busy under WSLg zoom. */}
+            {/* Static status dot — no infinite pulse so it does not imply a live backend connection (#18). */}
             <span className={clsx("relative inline-flex h-2 w-2 rounded-full", dotColor)} />
           </span>
           <div className="flex-1 text-xs">
@@ -127,16 +136,17 @@ function ProjectList() {
   const showMenu = useContextMenu();
   const confirm = useConfirm();
 
-  async function ingestNow(projectId: string, rootPath: string) {
+  async function ingestNow(projectId: string, rootPath: string, name: string) {
     try {
       const job = await api.startIngest(projectId, rootPath);
       useApp.getState().registerIngestJob(projectId, job.id);
-      showToast({ kind: "ok", text: `Indexing ${projectId}…` });
+      showToast({ kind: "ok", text: `Indexing ${name}…` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
   }
 
+// (#61) Deleting the active project falls back to the first remaining project.
   async function deleteProject(id: string, name: string) {
     const ok = await confirm({
       title: `Delete project "${name}"?`,
@@ -190,7 +200,7 @@ function ProjectList() {
         label: "Ingest now",
         icon: <FileSearch size={12} />,
         disabled: !p.root_path,
-        onClick: () => p.root_path && void ingestNow(p.id, p.root_path),
+        onClick: () => p.root_path && void ingestNow(p.id, p.root_path, p.name),
       },
       { label: "", separator: true, onClick: () => {} },
       {
@@ -213,7 +223,6 @@ function ProjectList() {
             key={p.id}
             onClick={() => {
               setCurrentProjectId(p.id);
-              setView("memories");
             }}
             onContextMenu={(e) => buildMenu(e, p)}
             className={clsx(

@@ -32,6 +32,8 @@ function arePropsEqual(prev: MemoryCardProps, next: MemoryCardProps) {
   );
 }
 
+// (#33) MemoryCard is a keyboard-focusable button with Enter/Space and context-menu keys.
+// (#36) Search hits render a relevance percentage instead of an unsorted list.
 export const MemoryCard = memo(function MemoryCard({
   memory,
   active,

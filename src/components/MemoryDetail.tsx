@@ -11,6 +11,11 @@ import { CodeBlock } from "./CodeBlock";
 
 export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () => void }) {
   // (#357) In-place editing for content, tags, and importance; mem_type selector and project move pending.
+// (#46) Per-uid draft cache preserves unsaved edits when selecting another memory.
+// (#48) ⌘Enter/Ctrl+Enter saves edits and a dirty indicator shows pending changes.
+// (#49) Related memories fetch by uid through the store, even when not in the loaded page.
+// (#50) Code file path chips open in the default app via tauri-plugin-opener.
+// (#52) Related memory similarity is rendered as a percentage bar, not raw decimals.
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -18,11 +23,12 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const [draft, setDraft] = useState(memory.content);
   const [draftTags, setDraftTags] = useState(memory.tags.join(", "));
   const [draftImp, setDraftImp] = useState(memory.importance);
+  const [draftType, setDraftType] = useState(memory.mem_type);
   const [related, setRelated] = useState<{ uid: string; content: string; score: number }[]>([]);
   // Per-uid draft cache: switching memories mid-edit preserves unsaved
   // changes instead of silently discarding them.
-  const draftCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
-  const baselineCache = useRef(new Map<string, { content: string; tags: string; imp: number }>());
+  const draftCache = useRef(new Map<string, { content: string; tags: string; imp: number; mem_type: string }>());
+  const baselineCache = useRef(new Map<string, { content: string; tags: string; imp: number; mem_type: string }>());
   const prevUidRef = useRef(memory.uid);
   const lastUpdatedAtRef = useRef(memory.updated_at);
   const refreshMemories = useApp((s) => s.refreshMemories);
@@ -38,6 +44,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       content: memory.content,
       tags: memory.tags.join(", "),
       imp: memory.importance,
+      mem_type: memory.mem_type,
     });
     lastUpdatedAtRef.current = memory.updated_at;
     setConflict(false);
@@ -46,15 +53,16 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
     const base = baselineCache.current.get(prevUid);
     const wasDirty =
       base != null &&
-      (draft !== base.content || draftTags !== base.tags || draftImp !== base.imp);
+      (draft !== base.content || draftTags !== base.tags || draftImp !== base.imp || draftType !== (base.mem_type ?? memory.mem_type));
     if (wasDirty) {
-      draftCache.current.set(prevUid, { content: draft, tags: draftTags, imp: draftImp });
+      draftCache.current.set(prevUid, { content: draft, tags: draftTags, imp: draftImp, mem_type: draftType });
       showToast({ kind: "info", text: "Unsaved edits kept as draft" });
     }
     const saved = draftCache.current.get(memory.uid);
     setDraft(saved ? saved.content : memory.content);
     setDraftTags(saved ? saved.tags : memory.tags.join(", "));
     setDraftImp(saved ? saved.imp : memory.importance);
+    setDraftType(saved ? saved.mem_type ?? memory.mem_type : memory.mem_type);
     setEditing(false);
     setExpanded(false);
     prevUidRef.current = memory.uid;
@@ -73,10 +81,12 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       setDraft(memory.content);
       setDraftTags(memory.tags.join(", "));
       setDraftImp(memory.importance);
+      setDraftType(memory.mem_type);
       baselineCache.current.set(memory.uid, {
         content: memory.content,
         tags: memory.tags.join(", "),
         imp: memory.importance,
+        mem_type: memory.mem_type,
       });
     }
     lastUpdatedAtRef.current = memory.updated_at;
@@ -126,6 +136,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           .filter(Boolean),
         importance: draftImp,
         updated_at: memory.updated_at,
+        mem_type: draftType,
       });
       await refreshMemories();
       showToast({ kind: "ok", text: "Saved" });
@@ -149,7 +160,33 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       setSelected(null);
       await refreshTags();
       await Promise.all([refreshMemories(), refreshStats()]);
-      showToast({ kind: "ok", text: "Forgotten" });
+      // (#54) Offer an Undo action that re-remembers the deleted content.
+      showToast({
+        kind: "ok",
+        text: "Forgotten",
+        action: {
+          label: "Undo",
+          onClick: () => void rememberDeleted(),
+        },
+      });
+    } catch (e) {
+      showToast({ kind: "err", text: friendlyError(e) });
+    }
+  }
+
+  async function rememberDeleted() {
+    try {
+      await api.remember({
+        content: memory.content,
+        mem_type: memory.mem_type,
+        project_id: memory.project_id,
+        tags: memory.tags,
+        importance: memory.importance,
+        source_agent: memory.source_agent,
+      });
+      await refreshTags();
+      await Promise.all([refreshMemories(), refreshStats()]);
+      showToast({ kind: "ok", text: "Restored" });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
@@ -218,7 +255,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           />
         ) : isCode ? (
           <div className="relative">
-            <CodeBlock code={bodyContent} maxLines={collapsed ? CODE_COLLAPSE_LINES : undefined} />
+            <CodeBlock code={bodyContent} maxLines={collapsed ? CODE_COLLAPSE_LINES : undefined} showCopy />
             {collapsed && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 rounded-b-md bg-gradient-to-t from-surface to-transparent" />
             )}
@@ -288,6 +325,24 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           </button>
         )}
 
+        {/* Type selector in edit mode (#47) */}
+        {editing && (
+          <div className="mt-4">
+            <div className="mb-1.5 text-[10px] uppercase tracking-widest text-text-dim">
+              Type
+            </div>
+            <select
+              value={draftType}
+              onChange={(e) => setDraftType(e.target.value)}
+              className="input w-40 text-sm"
+            >
+              {["fact", "decision", "preference", "pattern", "episode", "reflection", "code"].map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Tags */}
         <div className="mt-4">
           <div className="mb-1.5 text-[10px] uppercase tracking-widest text-text-dim">
@@ -348,16 +403,46 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           )}
         </div>
 
+        {/* Supersession chain (#45) */}
+        {(memory.superseded_by != null || memory.supersedes != null) && (
+          <div className="mt-5 border-t border-border-subtle pt-4">
+            <div className="mb-2 text-[10px] uppercase tracking-widest text-text-dim">
+              Supersession
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {memory.supersedes != null && (
+                <button
+                  onClick={() => void selectMemoryByUid(String(memory.supersedes))}
+                  className="btn-outline text-[11px]"
+                  title={`Open predecessor ${memory.supersedes}`}
+                >
+                  ← predecessor
+                </button>
+              )}
+              {memory.superseded_by != null && (
+                <button
+                  onClick={() => void selectMemoryByUid(String(memory.superseded_by))}
+                  className="btn-outline text-[11px]"
+                  title={`Open successor ${memory.superseded_by}`}
+                >
+                  successor →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Metadata grid */}
         <div className="mt-5 grid grid-cols-2 gap-3 border-t border-border-subtle pt-4 text-xs">
           <Meta label="Project" value={memory.project_id} mono />
           <Meta label="Source" value={memory.source_agent ?? "—"} mono />
           <Meta label="Created" value={shortDate(memory.created_at)} mono />
           <Meta label="Updated" value={shortDate(memory.updated_at)} mono />
-          <Meta label="Accesses" value={String(memory.access_count)} mono />
+          <Meta label="Accesses" value={String(memory.access_count)} mono title="Accesses include agent recalls and GUI views" />
           <Meta
             label="Last access"
             value={memory.last_access ? timeAgo(memory.last_access) : "—"}
+            title="Last time an agent or the GUI accessed this memory"
           />
         </div>
 
@@ -437,9 +522,9 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   );
 }
 
-function Meta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function Meta({ label, value, mono, title }: { label: string; value: string; mono?: boolean; title?: string }) {
   return (
-    <div>
+    <div title={title}>
       <div className="text-[10px] uppercase tracking-widest text-text-dim">
         {label}
       </div>

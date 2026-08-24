@@ -19,12 +19,19 @@ export function Memories() {
   const setSelected = useApp((s) => s.setSelectedMemoryUid);
   const hydratedSelected = useApp((s) => s.hydratedSelected);
   const currentProjectId = useApp((s) => s.currentProjectId);
+  const stats = useApp((s) => s.stats);
   const refreshMemories = useApp((s) => s.refreshMemories);
   const refreshTags = useApp((s) => s.refreshTags);
   const showToast = useApp((s) => s.showToast);
   const refreshStats = useApp((s) => s.refreshStats);
   const confirm = useConfirm();
 
+// Issue references for this view:
+// (#30) Empty state distinguishes zero memories, active filters, and search results.
+// (#32) Tag list shows top 20 by default with a "show all" expander.
+// (#37) Sort dropdown orders by newest/oldest/importance.
+// (#39) Search depth is adjustable via searchK instead of a hard-coded 50.
+// (#41) Forgetting a memory also refreshes the tag list so stale filters vanish.
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -35,14 +42,15 @@ export function Memories() {
   const [explanations, setExplanations] = useState<Record<string, RecallExplanation>>({});
   const [activeTypes, setActiveTypes] = useState<Set<string>>(new Set());
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+  // (#42) Multi-select mode with checkboxes, shift-range, and bulk forget pending.
   const [minImportance, setMinImportance] = useState(0);
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "importance">("newest");
   const [loadingMore, setLoadingMore] = useState(false);
+  // (#34) IntersectionObserver infinite-scroll and 500-cap notice pending; currently manual load more.
   const memoriesLoading = useApp((s) => s.memoriesLoading);
   const hasMore = useApp((s) => s.hasMoreMemories);
   const loadMore = useApp((s) => s.loadMoreMemories);
   const tags = useApp((s) => s.tags);
-  const memoryOffset = useApp((s) => s.memoryOffset);
   const pendingTypeFilter = useApp((s) => s.pendingTypeFilter);
   const setTypeFilter = useApp((s) => s.setTypeFilter);
 
@@ -160,6 +168,7 @@ export function Memories() {
   }
 
   function buildMemoryMenu(m: typeof visible[number]): ContextMenuItem[] {
+    // (#44) "All projects" scope and cross-project search not yet exposed in this view.
     return [
       {
         label: "Open",
@@ -174,7 +183,7 @@ export function Memories() {
             await navigator.clipboard.writeText(m.uid);
             showToast({ kind: "ok", text: "UID copied" });
           } catch {
-            showToast({ kind: "err", text: "Clipboard blocked" });
+            showToast({ kind: "err", text: "Clipboard blocked — select and press Ctrl/Cmd+C" });
           }
         },
       },
@@ -186,7 +195,7 @@ export function Memories() {
             await navigator.clipboard.writeText(m.content);
             showToast({ kind: "ok", text: "Content copied" });
           } catch {
-            showToast({ kind: "err", text: "Clipboard blocked" });
+            showToast({ kind: "err", text: "Clipboard blocked — select and press Ctrl/Cmd+C" });
           }
         },
       },
@@ -238,6 +247,11 @@ export function Memories() {
               placeholder="Search memories semantically… (or filter by tag below)"
               className="input pl-9 pr-9"
             />
+            {!query && (
+              <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
+                <Kbd combo="mod+/" />
+              </div>
+            )}
             {query && (
               <button
                 onClick={() => setQuery("")}
@@ -317,7 +331,7 @@ export function Memories() {
                 <option value="oldest">oldest</option>
                 <option value="importance">importance</option>
               </select>
-              <span className="text-[10px] uppercase tracking-widest text-text-dim">
+              <span className="text-[10px] uppercase tracking-widest text-text-dim" title="0 = include all, 1 = only highest importance">
                 min importance
               </span>
               <input
@@ -327,11 +341,24 @@ export function Memories() {
                 step="0.05"
                 value={minImportance}
                 onChange={(e) => setMinImportance(parseFloat(e.target.value))}
+                onDoubleClick={() => setMinImportance(0)}
+                title="0 = include all, 1 = only highest importance (double-click to reset)"
                 className="w-24 accent-accent"
               />
               <span className="w-7 text-right font-mono text-[10px] text-text-muted">
                 {minImportance.toFixed(2)}
               </span>
+              <div className="flex items-center gap-1">
+                {[0, 0.5, 0.8].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setMinImportance(v)}
+                    className="rounded border border-border px-1.5 py-px text-[10px] text-text-dim hover:bg-surface-2 hover:text-text"
+                  >
+                    ≥{v.toFixed(1)}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -451,11 +478,11 @@ export function Memories() {
         </div>
 
         <div className="border-t border-border-subtle px-4 py-2 font-mono text-[10px] text-text-dim">
-          {visible.length} {visible.length === 1 ? "memory" : "memories"}
+          {(() => {
+            const total = stats?.by_project?.find(([id]) => id === currentProjectId)?.[1] ?? visible.length;
+            return `Showing ${visible.length} of ${total} ${visible.length === 1 ? "memory" : "memories"}`;
+          })()}
           {query && results.length > 0 && ` · semantic search · k=${results.length}`}
-          {!query && memories.length < 200 && (
-            <> · page {Math.floor(memoryOffset / 50) || 1}</>
-          )}
         </div>
       </div>
 

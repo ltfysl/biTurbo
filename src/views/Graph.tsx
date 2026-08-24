@@ -27,6 +27,8 @@ type Pos = { x: number; y: number };
 const NODE_KINDS = ["file", "function", "class", "struct"] as const;
 type NodeKind = (typeof NODE_KINDS)[number];
 
+// (#76) Graph empty state points users to the in-app Projects view for indexing.
+// (#77) Zero-node graph renders an overlay instead of a blank canvas.
 const KIND_COLORS: Record<NodeKind, { fill: string; stroke: string }> = {
   file: { fill: "#D4A574", stroke: "#8a6b4a" },
   function: { fill: "#7DC4E4", stroke: "#3d7488" },
@@ -379,7 +381,7 @@ export function Graph() {
             await navigator.clipboard.writeText(n.uid);
             showToast({ kind: "ok", text: "UID copied" });
           } catch {
-            showToast({ kind: "err", text: "Clipboard blocked" });
+            showToast({ kind: "err", text: "Clipboard blocked — select and press Ctrl/Cmd+C" });
           }
         },
       },
@@ -391,7 +393,7 @@ export function Graph() {
             await navigator.clipboard.writeText(n.label);
             showToast({ kind: "ok", text: "Label copied" });
           } catch {
-            showToast({ kind: "err", text: "Clipboard blocked" });
+            showToast({ kind: "err", text: "Clipboard blocked — select and press Ctrl/Cmd+C" });
           }
         },
       },

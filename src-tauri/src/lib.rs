@@ -96,6 +96,7 @@ fn show_error_and_exit<R: tauri::Runtime>(app: &tauri::App<R>, msg: String) -> !
     std::process::exit(1);
 }
 
+// (#26) Single-instance guard: try to lock a pid file before starting another process.
 fn try_acquire_single_instance_lock() -> Option<std::fs::File> {
     let data_dir = match dirs::data_dir() {
         Some(d) => d.join(crate::APP_DIR_NAME),
@@ -180,6 +181,7 @@ pub fn run() {
 
             info!("biTurbo starting…");
 
+            // (#25) Corrupted/locked SQLite currently exits; a recovery screen with backup options is pending.
             let mut state = match AppState::open(&data_dir) {
                 Ok(s) => s,
                 Err(e) => show_error_and_exit(app, format!("cannot open biTurbo state: {e}")),

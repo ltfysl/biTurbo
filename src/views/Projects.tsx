@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useApp, useConfirm } from "../lib/store";
 import { api } from "../lib/api";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Plus, FolderGit2, Trash2, Database, FileSearch, Loader2, Eye, Download, FileText, Radar, FilePlus2 } from "lucide-react";
+import { Plus, FolderGit2, Trash2, Database, FileSearch, Loader2, Download, FileText, Radar, FilePlus2 } from "lucide-react";
 import clsx from "clsx";
-import type { IngestProgress } from "../lib/types";
+
 import { friendlyError } from "../lib/format";
 
+// (#60) Embed model is changed through an in-app modal, not window.prompt.
+// (#69) Running ingest jobs can be cancelled with a backend request.
 export function Projects() {
   const projects = useApp((s) => s.projects);
   const refreshProjects = useApp((s) => s.refreshProjects);
@@ -29,7 +31,7 @@ export function Projects() {
   const [importErrors, setImportErrors] = useState<{ projectId: string; errors: string[] } | null>(null);
 
 
-  const activeIngest = Object.values(ingestJobs)[0] as IngestProgress | undefined;
+  const activeIngests = Object.values(ingestJobs).filter((j) => j.phase !== "done");
 
   async function pickFolder() {
     const sel = await open({ directory: true, multiple: false });
@@ -74,15 +76,16 @@ export function Projects() {
     try {
       const job = await api.startIngest(projectId, root);
       registerIngestJob(projectId, job.id);
-      showToast({ kind: "info", text: `Started indexing ${projectId}…` });
+      // (#70) Pre-index scope/ETA and dry-run summary not yet shown before start.
+      const pName = projects.find((p) => p.id === projectId)?.name ?? projectId;
+      showToast({ kind: "info", text: `Started indexing ${pName}…` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
   }
 
-  async function cancelIngest() {
-    if (!activeIngest) return;
-    const jobId = ingestJobIds[activeIngest.project_id];
+  async function cancelIngest(projectId: string) {
+    const jobId = ingestJobIds[projectId];
     if (!jobId) {
       showToast({ kind: "err", text: "Cannot cancel — job id unknown" });
       return;
@@ -195,6 +198,7 @@ export function Projects() {
     }
   }
 
+    // (#67) Project edit (name, description, root_path) is not yet exposed from the GUI.
   const [modelEdit, setModelEdit] = useState<{
     id: string;
     name: string;
@@ -229,9 +233,18 @@ export function Projects() {
             Each project gets its own turbovec index, isolated memories, and a tree-sitter code map.
           </p>
         </div>
-        <button onClick={() => setCreating(true)} className="btn-primary">
-          <Plus size={14} /> New project
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportProject(null)}
+            className="btn-outline"
+            title="Export all memories across all projects"
+          >
+            <Download size={14} /> Export all
+          </button>
+          <button onClick={() => setCreating(true)} className="btn-primary">
+            <Plus size={14} /> New project
+          </button>
+        </div>
       </div>
 
       {projects.length === 0 && !creating && (
@@ -249,53 +262,51 @@ export function Projects() {
         </div>
       )}
 
-      {activeIngest && (
-        <div className="card p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm">
-            <Loader2 size={14} className="animate-spin text-accent" />
-            <span className="font-medium text-text">
-              {activeIngest.phase === "scanning" && "Scanning project…"}
-              {activeIngest.phase === "parsing" && "Parsing files…"}
-              {activeIngest.phase === "embedding" && "Embedding chunks…"}
-              {activeIngest.phase === "writing" && "Writing chunks…"}
-              {activeIngest.phase === "edges" && "Building edges…"}
-              {activeIngest.phase === "done" && "Done"}
-            </span>
-            {activeIngest.total > 0 && activeIngest.phase !== "done" && (
-              <span className="ml-auto font-mono text-xs text-text-muted">
-                {activeIngest.current}/{activeIngest.total} · {activeIngest.chunks_so_far} chunks
+      {activeIngests.map((j) => {
+        const pName = projects.find((p) => p.id === j.project_id)?.name ?? j.project_id;
+        return (
+          <div key={j.project_id} className="card p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm">
+              <Loader2 size={14} className="animate-spin text-accent" />
+              <span className="font-medium text-text">
+                {pName} · {j.phase === "scanning" && "Scanning…"}
+                {j.phase === "parsing" && "Parsing…"}
+                {j.phase === "embedding" && "Embedding…"}
+                {j.phase === "writing" && "Writing…"}
+                {j.phase === "edges" && "Building edges…"}
+                {j.phase === "done" && "Done"}
               </span>
+              {j.total > 0 && j.phase !== "done" && (
+                <span className="ml-auto font-mono text-xs text-text-muted">
+                  {j.current}/{j.total} · {j.chunks_so_far} chunks
+                </span>
+              )}
+              {j.phase !== "done" && (
+                <button
+                  onClick={() => void cancelIngest(j.project_id)}
+                  className="btn-ghost ml-auto shrink-0 px-2 py-0.5 text-[11px]"
+                  title="Request cancellation of this indexing run"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+            {j.total > 0 && j.phase !== "done" && (
+              <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
+                <div
+                  className="h-full bg-accent transition-all"
+                  style={{ width: `${Math.min(100, (j.current / j.total) * 100)}%` }}
+              />
+              </div>
             )}
-            {activeIngest.phase !== "done" && (
-              <button
-                onClick={() => void cancelIngest()}
-                className="btn-ghost ml-auto shrink-0 px-2 py-0.5 text-[11px]"
-                title="Request cancellation of this indexing run"
-              >
-                Cancel
-              </button>
-            )}
-            {activeIngest.phase === "done" && (
-              <span className="ml-auto font-mono text-xs text-success">
-                {activeIngest.chunks_so_far} chunks indexed
-              </span>
+            {j.file && (
+              <div className="mt-2 truncate font-mono text-[11px] text-text-dim">
+                {j.file}
+              </div>
             )}
           </div>
-          {activeIngest.total > 0 && activeIngest.phase !== "done" && (
-            <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
-              <div
-                className="h-full bg-accent transition-all"
-                style={{ width: `${Math.min(100, (activeIngest.current / activeIngest.total) * 100)}%` }}
-              />
-            </div>
-          )}
-          {activeIngest.file && (
-            <div className="mt-2 truncate font-mono text-[11px] text-text-dim">
-              {activeIngest.file}
-            </div>
-          )}
-        </div>
-      )}
+        );
+      })}
 
       {importErrors && (
         <div className="card border-warning/40 p-4">
@@ -532,13 +543,6 @@ export function Projects() {
                   embed model
                 </button>
                 <div className="flex-1" />
-                <button
-                  onClick={() => exportProject(null)}
-                  className="btn-ghost text-[11px] text-text-muted"
-                  title="Export all memories across all projects"
-                >
-                  <Eye size={11} /> Export all
-                </button>
                 {p.id !== "default" && (
                   <button
                     onClick={() => remove(p.id, p.name)}

@@ -10,6 +10,7 @@ import {
   FileCode2,
   Sun,
   Moon,
+  Monitor,
   Power,
   AppWindow,
   Download,
@@ -361,7 +362,7 @@ ${end}`;
         </div>
       </Section>
 
-      <Section icon={theme === "dark" ? Moon : Sun} title="Appearance">
+      <Section icon={theme === "system" ? Monitor : theme === "dark" ? Moon : Sun} title="Appearance">
         <p className="text-sm text-text-muted">
           Pick the interface theme. Saved per device.
         </p>
@@ -383,6 +384,16 @@ ${end}`;
             )}
           >
             <Sun size={13} /> Light
+          </button>
+          <button
+            onClick={() => setTheme("system")}
+            className={clsx(
+              "btn-outline",
+              theme === "system" && "border-accent/50 bg-accent-soft text-text"
+            )}
+            title="Follow the OS setting"
+          >
+            <Monitor size={13} /> System
           </button>
         </div>
       </Section>

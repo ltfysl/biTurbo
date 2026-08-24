@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useApp } from "./lib/store";
+import { useApp, type View } from "./lib/store";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { QuickAdd } from "./components/QuickAdd";
@@ -13,6 +13,7 @@ import { Toast } from "./components/Toast";
 import { ConfirmModalHost } from "./components/ConfirmModal";
 import { ContextMenuHost } from "./components/ContextMenu";
 
+// (#24) Drag-and-drop file/folder handling is pending Tauri drag-drop events.
 export default function App() {
   const view = useApp((s) => s.view);
   const currentProjectId = useApp((s) => s.currentProjectId);
@@ -50,9 +51,12 @@ export default function App() {
     refreshGraph().catch(() => {});
   }, [currentProjectId, ready, refreshMemories, refreshTags, refreshGraph]);
 
-  // Global keyboard
+  // Global keyboard (#16): number keys 1-6 switch views; mod+K opens QuickAdd; mod+/ focuses search.
   useEffect(() => {
+    const viewOrder: View[] = ["overview", "memories", "projects", "graph", "agents", "settings"];
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const editing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key === "k") {
         e.preventDefault();
@@ -62,6 +66,8 @@ export default function App() {
         document.getElementById("global-search")?.focus();
       } else if (e.key === "Escape") {
         useApp.getState().setQuickAddOpen(false);
+      } else if (!editing && !meta && !e.altKey && e.key >= "1" && e.key <= "6") {
+        useApp.getState().setView(viewOrder[parseInt(e.key, 10) - 1]);
       }
     };
     window.addEventListener("keydown", onKey);

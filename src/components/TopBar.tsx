@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 import { ingestPhaseLabel, timeAgo } from "../lib/format";
 import type { ConsolidateReport, ConsolidateStatus } from "../lib/types";
 import { friendlyError } from "../lib/format";
-import { Kbd } from "../lib/kbd";
+import { Kbd } from "../lib/kbd"; // (#10) Platform-correct shortcut glyphs
 
 
 export function TopBar() {
@@ -91,10 +91,10 @@ export function TopBar() {
       data-tauri-drag-region
       className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-bg/40 px-4 backdrop-blur"
     >
-      {/* View title */}
+      {/* View title: use readable nav labels instead of raw view id (#27). */}
       <div className="flex items-baseline gap-3 pl-16">
-        <h1 className="font-serif text-lg font-medium capitalize text-text">
-          {view}
+        <h1 className="font-serif text-lg font-medium text-text">
+          {({ overview: "Overview", memories: "Memories", projects: "Projects", graph: "Graph", agents: "Agents", settings: "Settings" } as Record<string, string>)[view] ?? view}
         </h1>
         {currentProject && view !== "projects" && view !== "settings" && (
           <span className="font-mono text-[11px] text-text-dim">

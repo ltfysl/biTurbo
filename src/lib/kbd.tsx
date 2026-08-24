@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 /**
- * Detect the host platform for shortcut rendering. In Tauri the renderer is
+ * Detect the host platform for shortcut rendering (#10). In Tauri the renderer is
  * a regular browser, so `navigator.platform` is the best lightweight signal.
  */
 export function isMac(): boolean {
