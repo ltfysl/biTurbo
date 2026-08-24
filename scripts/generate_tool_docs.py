@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# (#398) Generated docs are the single source of truth for the tool registry.
 """Generate docs/tools-table.md from the single source of truth in mcp.rs."""
 import json
 import re
