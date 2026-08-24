@@ -311,6 +311,7 @@
   }
   .code-block-line {
     @apply whitespace-pre truncate;
+    display: block;
   }
   .code-block-line.wrap {
     white-space: pre-wrap;
