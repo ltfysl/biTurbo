@@ -45,6 +45,7 @@ fs4 = "0.13"
 # Vector index
 turbovec = "0.8"
 ndarray = "0.16"
+# Issue #374: ANN index option (HNSW) for very large projects.
 
 # Embeddings
 fastembed = "4"
@@ -106,6 +107,7 @@ custom-protocol = ["tauri/custom-protocol"]
 # Prefer GPU with fallback: BITURBO_EMBED_EP=auto (default when feature enabled)
 # Force: BITURBO_EMBED_EP=cuda | cpu
 cuda = ["ort/cuda"]
+# Issue #376: Apple Silicon acceleration (CoreML / Metal EP).
 
 [profile.release]
 panic = "abort"

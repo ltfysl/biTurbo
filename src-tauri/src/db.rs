@@ -7,6 +7,7 @@
 //! agents    — registered AI agents (Mavis, Cursor, Claude Code, Cline…)
 //! activity  — append-only audit log of writes/reads
 //! code_index — tree-sitter chunks per project (file:range → memory)
+//! embed_cache — persistent embedding cache for query/chunk vectors (#375).
 
 // Issue #380: scheduled pruning of activity, recall_events, feedback, operations, applied mutations.
 // Issue #257: Typed memory links (related / caused-by / derived-from / supports).
@@ -18,6 +19,7 @@
 // Issue #324: Scheduled backups with retention policy (indices + SQLite snapshots).
 // Issue #331: Encrypted-at-rest project stores (SQLCipher / page encryption).
 // Issue #336: Audit log export + tamper-evident hash chain (activity table).
+// Issue #375: Persistent embedding cache on disk.
 
 use crate::error::BiResult;
 use parking_lot::Mutex;
