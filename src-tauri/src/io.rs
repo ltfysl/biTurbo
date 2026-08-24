@@ -182,17 +182,20 @@ pub fn export_memories(
         exports_dir.join(output_path)
     };
     let mems = crate::memory::list(state, project_id, None, 1_000_000, 0)?;
-    let json = serde_json::to_string_pretty(&serde_json::json!({
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| BiError::Io(format!("create {}: {e}", parent.display())))?;
+    }
+    let file = std::fs::File::create(&output_path)
+        .map_err(|e| BiError::Io(format!("create {}: {e}", output_path.display())))?;
+    let payload = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "exported_at": chrono::Utc::now().timestamp_millis(),
         "project_id": project_id,
         "memories": mems,
-    }))?;
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(&output_path, json)
-        .map_err(|e| BiError::Io(format!("write {}: {e}", output_path.display())))?;
+    });
+    serde_json::to_writer_pretty(file, &payload)
+        .map_err(|e| BiError::Io(format!("serialize export: {e}")))?;
     Ok(ExportResult {
         memories_written: mems.len(),
         output_path: output_path.to_string_lossy().to_string(),
