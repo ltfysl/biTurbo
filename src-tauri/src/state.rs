@@ -461,7 +461,7 @@ impl AppState {
     /// Cheap consistency pass before a search: apply pending journal
     /// mutations, backfill purely-missing vectors inline, and hand larger
     /// rebuilds to a background worker so a stale index never turns a search
-    /// into a blocking whole-project re-embedding job.
+    /// into a blocking whole-project re-embedding job (#414).
     fn sync_index_if_stale(&self, project_id: &str) -> BiResult<()> {
         self.replay_index_mutations(project_id)?;
         let idx = self.get_or_load_index(project_id)?;
