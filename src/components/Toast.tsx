@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useApp } from "../lib/store";
 import clsx from "clsx";
 
@@ -18,6 +19,7 @@ export function Toast() {
       {toasts.map((t) => (
         <div
           key={t.id}
+          role={t.kind === "err" ? "alert" : "status"}
           onClick={() => dismissToast(t.id)}
           className={clsx(
             "flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm shadow-lg animate-fade_in",
@@ -41,6 +43,17 @@ export function Toast() {
               {t.action.label}
             </button>
           )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              dismissToast(t.id);
+            }}
+            className="shrink-0 rounded p-0.5 hover:bg-current/10"
+            aria-label="Dismiss notification"
+          >
+            <X size={14} />
+          </button>
         </div>
       ))}
     </div>

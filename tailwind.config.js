@@ -18,14 +18,13 @@ export default {
 // (#530) surface-3 token for bg-surface-3 (e.g. Settings toggles).
         "surface-3": "rgb(var(--surface-3-rgb) / <alpha-value>)",
         border: "rgb(var(--border-rgb) / <alpha-value>)",
-        "border-subtle": "rgb(var(--border-rgb) / <alpha-value>)",
+        "border-subtle": "rgb(var(--border-subtle-rgb) / <alpha-value>)",
         text: "rgb(var(--text-rgb) / <alpha-value>)",
         "text-muted": "rgb(var(--text-muted-rgb) / <alpha-value>)",
-        "text-dim": "rgb(var(--text-muted-rgb) / <alpha-value>)",
+        "text-dim": "rgb(var(--text-dim-rgb) / <alpha-value>)",
         accent: {
           DEFAULT: "rgb(var(--accent-rgb) / <alpha-value>)",
           soft: "var(--accent-soft)",
-          glow: "var(--accent-glow)",
         },
         success: "rgb(var(--success-rgb) / <alpha-value>)",
         warning: "rgb(var(--warning-rgb) / <alpha-value>)",

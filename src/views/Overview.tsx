@@ -18,7 +18,11 @@ export function Overview() {
   const projects = useApp((s) => s.projects);
   const agents = useApp((s) => s.agents);
   const recent = useMemo(
-    () => memories.filter((m) => m.project_id === currentProjectId).slice(0, 6),
+    () =>
+      [...memories]
+        .filter((m) => m.project_id === currentProjectId)
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, 6),
     [memories, currentProjectId]
   );
 
@@ -254,7 +258,7 @@ function StatCard({
     <div className="card p-4">
       <div className="flex items-center gap-2 text-text-dim">
         <Icon size={13} />
-        <span className="text-[10px] uppercase tracking-widest">{label}</span>
+        <span className="text-[11px] uppercase tracking-widest">{label}</span>
       </div>
       <div className="mt-1.5 font-serif text-2xl font-medium text-text">{value}</div>
       {hint && <div className="mt-0.5 font-mono text-[10px] text-text-dim">{hint}</div>}

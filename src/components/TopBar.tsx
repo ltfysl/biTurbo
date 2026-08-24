@@ -3,7 +3,7 @@ import { useApp } from "../lib/store";
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
-import { ingestPhaseLabel, timeAgo } from "../lib/format";
+import { ingestPhaseLabel, timeAgo, bytes } from "../lib/format";
 import type { ConsolidateReport, ConsolidateStatus } from "../lib/types";
 import { friendlyError } from "../lib/format";
 import { Kbd } from "../lib/kbd"; // (#10) Platform-correct shortcut glyphs
@@ -80,6 +80,8 @@ export function TopBar() {
     setConsolidating(true);
     try {
       await api.consolidate(currentProjectId);
+      setConsolidating(false);
+      void api.consolidateStatus().then(setConsolidateStatus);
     } catch (e) {
       setConsolidating(false);
       showToast({ kind: "err", text: friendlyError(e) });
@@ -92,7 +94,7 @@ export function TopBar() {
       className="flex h-14 shrink-0 items-center gap-3 border-b border-border-subtle bg-bg/40 px-4 backdrop-blur"
     >
       {/* View title: use readable nav labels instead of raw view id (#27). */}
-      <div className="flex items-baseline gap-3 pl-16">
+      <div className="flex items-baseline gap-3">
         <h1 className="font-serif text-lg font-medium text-text">
           {({ overview: "Overview", memories: "Memories", projects: "Projects", graph: "Graph", agents: "Agents", settings: "Settings" } as Record<string, string>)[view] ?? view}
         </h1>
@@ -129,7 +131,7 @@ export function TopBar() {
       {stats && (
         <div className="hidden items-center gap-2 rounded-md border border-border-subtle bg-surface px-2.5 py-1 text-[11px] text-text-muted md:flex">
           <span className="font-mono">
-            {(stats.index_bytes / 1024 / 1024).toFixed(2)} MB
+            {bytes(stats.index_bytes)}
           </span>
           <span className="text-text-dim">·</span>
           <span>

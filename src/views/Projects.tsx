@@ -3,6 +3,7 @@ import { useApp, useConfirm } from "../lib/store";
 import { api } from "../lib/api";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Plus, FolderGit2, Trash2, Database, FileSearch, Loader2, Download, FileText, Radar, FilePlus2 } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import clsx from "clsx";
 
 import { friendlyError } from "../lib/format";
@@ -34,8 +35,12 @@ export function Projects() {
   const activeIngests = Object.values(ingestJobs).filter((j) => j.phase !== "done");
 
   async function pickFolder() {
-    const sel = await open({ directory: true, multiple: false });
-    if (typeof sel === "string") setRootPath(sel);
+    try {
+      const sel = await open({ directory: true, multiple: false });
+      if (typeof sel === "string") setRootPath(sel);
+    } catch (e) {
+      showToast({ kind: "err", text: friendlyError(e) });
+    }
   }
 
   async function create() {
@@ -159,7 +164,7 @@ export function Projects() {
     if (!target) return;
     try {
       const r = await api.exportMemories(projectId, target);
-      showToast({ kind: "ok", text: `Exported ${r.memories_written} memories → ${r.output_path}` });
+      showToast({ kind: "ok", text: `Exported ${r.memories_written} memories`, action: { label: "Reveal", onClick: () => { revealItemInDir(r.output_path).catch(() => {}); } } });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
@@ -343,7 +348,7 @@ export function Projects() {
           <h3 className="font-serif text-lg">New project</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-[10px] uppercase tracking-widest text-text-dim">
+              <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
                 Name
               </label>
               <input
@@ -363,7 +368,7 @@ export function Projects() {
               )}
             </div>
             <div>
-              <label className="mb-1 block text-[10px] uppercase tracking-widest text-text-dim">
+              <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
                 Description
               </label>
               <input
@@ -375,7 +380,7 @@ export function Projects() {
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-widest text-text-dim">
+            <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
               Root path (for code indexing)
             </label>
             <div className="flex gap-2">

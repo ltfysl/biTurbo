@@ -19,7 +19,6 @@
   --text-dim: #6B6258;
   --accent: #D4A574;
   --accent-soft: rgba(212, 165, 116, 0.12);
-  --accent-glow: rgba(212, 165, 116, 0.25);
   --success: #8FB87D;
   --warning: #D4B574;
   --danger: #C77B6E;
@@ -29,7 +28,6 @@
   --scrollbar-thumb: #2A2620;
   --scrollbar-thumb-hover: #3a342d;
   --shadow-modal: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.4);
-  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.02) inset;
   --backdrop: rgb(0 0 0 / 0.55);
   /* RGB triplets for Tailwind alpha composition. */
   --bg-rgb: 15 14 12;
@@ -43,6 +41,8 @@
   --success-rgb: 143 184 125;
   --warning-rgb: 212 181 116;
   --danger-rgb: 199 123 110;
+  --border-subtle-rgb: 34 31 27;
+  --text-dim-rgb: 107 98 88;
 
   /* Code display (dark) */
   --code-block-bg: rgb(0 0 0 / 0.3);
@@ -109,7 +109,6 @@
   --text-dim: #998B72;
   --accent: #B08550;
   --accent-soft: rgba(176, 133, 80, 0.14);
-  --accent-glow: rgba(176, 133, 80, 0.28);
   --success: #4F7F3D;
   --warning: #9C7E2A;
   --danger: #B05549;
@@ -119,7 +118,6 @@
   --scrollbar-thumb: #D9CFB8;
   --scrollbar-thumb-hover: #B8AB91;
   --shadow-modal: 0 10px 30px -5px rgb(60 45 20 / 0.18), 0 4px 8px -2px rgb(60 45 20 / 0.10);
-  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.6) inset;
   --backdrop: rgb(60 45 20 / 0.30);
   --bg-rgb: 246 241 232;
   --surface-rgb: 255 252 245;
@@ -132,6 +130,8 @@
   --success-rgb: 79 127 61;
   --warning-rgb: 156 126 42;
   --danger-rgb: 176 85 73;
+  --border-subtle-rgb: 229 220 200;
+  --text-dim-rgb: 153 139 114;
 
   /* Code display (light) */
   --code-block-bg: rgb(31 27 22 / 0.06);
@@ -328,6 +328,9 @@
   }
   .shadow-modal {
     box-shadow: var(--shadow-modal);
+  }
+  .backdrop {
+    background-color: var(--backdrop);
   }
 }
 

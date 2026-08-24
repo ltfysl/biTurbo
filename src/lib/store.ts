@@ -11,6 +11,7 @@ import type {
 } from "./types";
 
 import { api } from "./api";
+import { friendlyError } from "./format";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ConfirmOptions } from "../components/ConfirmModal";
 import type { ContextMenuItem } from "../components/ContextMenu";
@@ -233,7 +234,7 @@ export const useApp = create<AppStore>((set, get) => ({
         set({ hydratedSelected: m });
       }
     } catch (e) {
-      get().showToast({ kind: "err", text: String(e) });
+      get().showToast({ kind: "err", text: friendlyError(e) });
     }
   },
   memoryOffset: 0,

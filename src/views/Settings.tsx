@@ -539,7 +539,7 @@ ${end}`;
         </p>
 
         <div className="mt-4">
-          <label className="mb-1 block text-[10px] uppercase tracking-widest text-text-dim">
+          <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
             Project for the rule block
           </label>
           <select
