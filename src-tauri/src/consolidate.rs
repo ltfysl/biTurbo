@@ -1,5 +1,5 @@
 use crate::db::log_activity;
-use crate::error::BiResult;
+use crate::error::{BiError, BiResult};
 use crate::memory;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
@@ -34,15 +34,31 @@ pub struct ConsolidateReport {
     pub removed: usize,
 }
 
-pub fn consolidate(state: &AppState, project_id: Option<&str>) -> BiResult<ConsolidateReport> {
+pub fn consolidate(
+    state: &AppState,
+    project_id: Option<&str>,
+    op_id: Option<&str>,
+) -> BiResult<ConsolidateReport> {
     let decayed = apply_decay(state, project_id)?;
+    if let Some(id) = op_id {
+        if crate::operations::is_cancel_requested(state, id)? {
+            crate::operations::mark_cancelled(state, id)?;
+            return Err(BiError::Invalid("operation cancelled".into()));
+        }
+    }
     let mut report = ConsolidateReport {
         decayed,
         ..Default::default()
     };
-    let dupes = find_duplicates(state, project_id)?;
+    let dupes = find_duplicates(state, project_id, op_id)?;
     report.duplicates_found = dupes.len();
     for (keep_uid, drop_uid) in dupes {
+        if let Some(id) = op_id {
+            if crate::operations::is_cancel_requested(state, id)? {
+                crate::operations::mark_cancelled(state, id)?;
+                return Err(BiError::Invalid("operation cancelled".into()));
+            }
+        }
         if merge_pair(state, &keep_uid, &drop_uid)? {
             report.merged += 1;
             report.removed += 1;
@@ -63,7 +79,6 @@ pub fn consolidate(state: &AppState, project_id: Option<&str>) -> BiResult<Conso
 
     Ok(report)
 }
-
 /// Pure decay computation (issue #435): importance is always recomputed from
 /// the fixed `decay_base` baseline, never from the already-decayed stored
 /// value, so repeated consolidate runs converge instead of compounding.
@@ -163,7 +178,11 @@ fn token_jaccard_similarity(a: &str, b: &str) -> f32 {
     intersection.len() as f32 / union.len() as f32
 }
 
-fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(String, String)>> {
+fn find_duplicates(
+    state: &AppState,
+    project_id: Option<&str>,
+    op_id: Option<&str>,
+) -> BiResult<Vec<(String, String)>> {
     let conn = state.db.conn()?;
     let project_ids: Vec<String> = match project_id {
         Some(p) => vec![p.to_string()],
@@ -181,12 +200,24 @@ fn find_duplicates(state: &AppState, project_id: Option<&str>) -> BiResult<Vec<(
 
     let mut dupes: HashSet<(String, String)> = HashSet::new();
     for pid in project_ids {
+        if let Some(id) = op_id {
+            if crate::operations::is_cancel_requested(state, id)? {
+                crate::operations::mark_cancelled(state, id)?;
+                return Err(BiError::Invalid("operation cancelled".into()));
+            }
+        }
         // Process in batches to bound RAM. Skip code-type memories —
         // deduplicating code chunks is expensive and rarely useful.
         let idx = state.get_or_load_index(&pid)?;
         let mut offset = 0usize;
-        const BATCH: usize = 1000;
-        loop {
+    const BATCH: usize = 1000;
+    loop {
+        if let Some(id) = op_id {
+            if crate::operations::is_cancel_requested(state, id)? {
+                crate::operations::mark_cancelled(state, id)?;
+                return Err(BiError::Invalid("operation cancelled".into()));
+            }
+        }
             // Page candidates directly (issue #436): memory::list has no
             // superseded_by filter, so it could pair an active memory with a
             // zombie copy. Only active rows are eligible for merging.

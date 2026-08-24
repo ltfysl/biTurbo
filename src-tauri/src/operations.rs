@@ -700,7 +700,7 @@ fn execute_consolidate(
         mark_cancelled(state, id)?;
         return Err(BiError::Invalid("operation cancelled".into()));
     }
-    match crate::consolidate::consolidate(state, project_id) {
+    match crate::consolidate::consolidate(state, project_id, Some(id)) {
         Ok(report) => {
             if is_cancel_requested(state, id)? {
                 mark_cancelled(state, id)?;
@@ -713,7 +713,9 @@ fn execute_consolidate(
             Ok(report)
         }
         Err(error) => {
-            fail(state, id, &error.to_string())?;
+            if !is_cancel_requested(state, id)? {
+                fail(state, id, &error.to_string())?;
+            }
             Err(error)
         }
     }
