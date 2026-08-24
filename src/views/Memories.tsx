@@ -3,13 +3,12 @@ import { useApp, useConfirm } from "../lib/store";
 import { api } from "../lib/api";
 import { MemoryCard } from "../components/MemoryCard";
 import { MemoryDetail } from "../components/MemoryDetail";
-import { Search, X, FileCode2, Hash, ExternalLink, Copy, Trash2 } from "lucide-react";
+import { Search, X, Hash, ExternalLink, Copy, Trash2, Inbox, SearchX } from "lucide-react";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import type { ExplainedMemory, RecallExplanation } from "../lib/types";
 import clsx from "clsx";
-import { friendlyError } from "../lib/format";
+import { friendlyError, MEM_TYPE_META } from "../lib/format";
 import { Kbd } from "../lib/kbd";
-
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
 const SEARCH_DEBOUNCE_MS = 180;
 
@@ -224,6 +223,9 @@ export function Memories() {
       },
     ];
   }
+  // (#169) Build stable context-menu arrays once per visible list so
+  // MemoryCard memoization isn't defeated by inline JSX/closures.
+  const menuMap = useMemo(() => new Map(visible.map((m) => [m.uid, buildMemoryMenu(m)])), [visible]);
 
   // (#354) Tag list with counts and show-all toggle; full tag browser with drill-down and co-occurrence pending.
   const [showAllTags, setShowAllTags] = useState(false);
@@ -411,12 +413,16 @@ export function Memories() {
           )}
           {!memoriesLoading && visible.length === 0 && query.trim() ? (
             <div className="flex h-64 flex-col items-center justify-center text-center text-text-dim">
-              <FileCode2 size={24} className="mb-2 opacity-50" />
+              <SearchX size={24} className="mb-2 opacity-50" />
               <div className="text-sm">
-                No memories match the active filters
-                {activeTypes.size + activeTags.size > 0 &&
-                  ` (${[...activeTypes, ...activeTags].length} active)`}
-                .
+                {(() => {
+                  const onlyType =
+                    activeTypes.size === 1 && activeTags.size === 0
+                      ? [...activeTypes][0]
+                      : null;
+                  const type = onlyType ? MEM_TYPE_META[onlyType]?.label.toLowerCase() ?? onlyType : "memories";
+                  return `No ${type} match the active filters`;
+                })()}
               </div>
               <button
                 onClick={() => {
@@ -430,8 +436,8 @@ export function Memories() {
               </button>
             </div>
           ) : visible.length === 0 ? (
-            <div className="flex h-64 flex-col items-center justify-center text-center text-text-dim">
-              <FileCode2 size={24} className="mb-2 opacity-50" />
+            <div className="flex h-64 flex-col items-center justify-center p-4 text-center text-text-dim">
+              <Inbox size={24} className="mb-2 opacity-50" />
               <div className="text-sm">No memories in this project yet.</div>
               <div className="mt-1 text-xs">
                 Press <Kbd combo="mod+K" /> to add one.
@@ -447,10 +453,12 @@ export function Memories() {
                   onClick={() => {
                     setSelected(m.uid);
                     if (recallId) {
-                      void api.submitRecallFeedback(recallId, m.uid, 1, "implicit");
+                      void api
+                        .submitRecallFeedback(recallId, m.uid, 1, "implicit")
+                        .catch((e) => showToast({ kind: "err", text: friendlyError(e) }));
                     }
                   }}
-                  contextMenuItems={buildMemoryMenu(m)}
+                  contextMenuItems={menuMap.get(m.uid)!}
                   score={results.find((r) => r.uid === m.uid)?.score}
                   explanation={explanations[m.uid]}
                   onFeedback={

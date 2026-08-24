@@ -379,6 +379,14 @@ export function Graph() {
     const uid = hitTest(mx, my);
     setHover(uid);
     setHoverPos(uid ? { x: mx, y: my } : null);
+    if (canvasRef.current) {
+      if (!uid) {
+        canvasRef.current.style.cursor = "grab";
+      } else {
+        const n = data?.nodes.find((x) => x.uid === uid);
+        canvasRef.current.style.cursor = n && n.kind === "file" ? "default" : "pointer";
+      }
+    }
   }
 
   // (#197) Ignore clicks that were part of a pan.
@@ -492,8 +500,8 @@ export function Graph() {
             onMouseMoveHover(e);
           }}
           onMouseUp={onMouseUp}
-          onMouseLeave={() => { onMouseUp(); pointerMoved.current = false; setHover(null); setHoverPos(null); }}
           onClick={onClick}
+          onMouseLeave={() => { onMouseUp(); pointerMoved.current = false; setHover(null); setHoverPos(null); if (canvasRef.current) canvasRef.current.style.cursor = "grab"; }}
           onContextMenu={onContextMenu}
         />
 

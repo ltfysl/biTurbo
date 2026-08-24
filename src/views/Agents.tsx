@@ -16,6 +16,7 @@ export function Agents() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState(KINDS[0]);
   const [busy, setBusy] = useState(false);
+// (#249) Refresh button spins, disables, and labels itself while agents load.
   const [refreshing, setRefreshing] = useState(false);
   // Ticker so "active now"/"today" badges re-evaluate as time passes
   // instead of freezing at whatever Date.now() was on the last render.

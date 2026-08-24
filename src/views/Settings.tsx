@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { useApp } from "../lib/store";
+import { useApp, useConfirm } from "../lib/store";
 import { api } from "../lib/api";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   Terminal,
   Folder,
@@ -22,7 +23,6 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import clsx from "clsx";
-
 export function Settings() {
   const stats = useApp((s) => s.stats);
   const currentProjectId = useApp((s) => s.currentProjectId);
@@ -30,6 +30,7 @@ export function Settings() {
   const showToast = useApp((s) => s.showToast);
   const theme = useApp((s) => s.theme);
   const setTheme = useApp((s) => s.setTheme);
+  const confirm = useConfirm();
   const [copied, setCopied] = useState<string | null>(null);
   const [resolvedDataDir, setResolvedDataDir] = useState<string | null>(null);
   const [mcpBinary, setMcpBinary] = useState<{ path: string; is_absolute: boolean } | null>(null);
@@ -42,6 +43,7 @@ export function Settings() {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; available: boolean } | null>(null);
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   useEffect(() => {
     isEnabled()
@@ -63,6 +65,12 @@ export function Settings() {
       .resolveMcpBinaryPath()
       .then(setMcpBinary)
       .catch(() => setMcpBinary(null));
+  }, []);
+  // (#278) Surface the installed app version before any update check is run.
+  useEffect(() => {
+    getVersion()
+      .then((v) => setAppVersion(v))
+      .catch(() => setAppVersion(null));
   }, []);
   const projectRule = useMemo(() => {
     const pid = ruleProjectId ?? currentProjectId;
@@ -163,6 +171,12 @@ Project-agnostic preferences and cross-project facts live here.
 - Never store secrets, tokens, PII
 ${end}`;
   }, []);
+  // (#268) Use the selected project's name in the rule block header.
+  const ruleProjectName = useMemo(() => {
+    const pid = ruleProjectId ?? currentProjectId;
+    const p = projects.find((x) => x.id === pid);
+    return p ? p.name : pid;
+  }, [projects, currentProjectId, ruleProjectId]);
 
   async function toggleLaunchOnBoot() {
     if (bootLoading || bootSaving) return;
@@ -210,6 +224,7 @@ ${end}`;
     { id: "zed", label: "Zed" },
   ] as const;
 
+  // (#251) Pre-check MCP install targets that already contain a biturbo entry on load.
   useEffect(() => {
     Promise.all(
       mcpTargets.map((t) =>
@@ -283,6 +298,7 @@ ${end}`;
         </p>
         {resolvedDataDir ? (
           <div className="mt-3 flex items-center gap-2 rounded-md border border-border-subtle bg-surface-2 p-3">
+            {/* (#259) Show the actual data dir for this device with Open and Copy. */}
             <span
               className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted"
               title={resolvedDataDir}
@@ -310,11 +326,83 @@ ${end}`;
             >
               Open folder
             </button>
+            <button
+              onClick={() => copy("data dir", resolvedDataDir)}
+              className="btn-outline text-xs"
+              aria-label="Copy data dir path"
+            >
+              {copied === "data dir" ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            </button>
           </div>
         ) : (
-          <pre className="mt-3 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted">
-            {dataDir}
-          </pre>
+          <div className="relative group mt-3">
+            {/* (#254) Data-dir fallback also gets a one-click Copy button. */}
+            <button
+              onClick={() => copy("data dir", dataDir)}
+              className="absolute top-2 right-2 z-10 rounded border border-border-subtle bg-surface-2 p-1.5 text-text-dim opacity-0 transition hover:text-text group-hover:opacity-100"
+              aria-label="Copy data dir"
+              title="Copy data dir"
+            >
+              {copied === "data dir" ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            </button>
+            <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted">
+              {dataDir}
+            </pre>
+          </div>
+        )}
+      </Section>
+      <Section icon={FileCode2} title="Diagnostics">
+        <p className="text-sm text-text-muted">
+          If MCP, ingest, or search is misbehaving, the log file and these details can help support.
+        </p>
+        {resolvedDataDir ? (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-border-subtle bg-surface-2 p-3">
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted"
+              title={`${resolvedDataDir}/logs/biturbo.log`}
+            >
+              {resolvedDataDir}/logs/biturbo.log
+            </span>
+            <button
+              onClick={async () => {
+                const logPath = `${resolvedDataDir}/logs/biturbo.log`;
+                try {
+                  await openPath(logPath);
+                  return;
+                } catch {
+                  try {
+                    await invoke("open_file", { path: logPath });
+                  } catch (e) {
+                    showToast({ kind: "err", text: `Could not open log: ${String(e)}` });
+                  }
+                }
+              }}
+              className="btn-outline text-xs"
+            >
+              Open log
+            </button>
+            <button
+              onClick={() => {
+                const logPath = `${resolvedDataDir}/logs/biturbo.log`;
+                const diagnostics = `biTurbo diagnostics
+Version: ${appVersion ?? "unknown"}
+Data dir: ${resolvedDataDir}
+Log path: ${logPath}
+Project: ${currentProjectId}
+Theme: ${theme}`;
+                copy("diagnostics", diagnostics);
+              }}
+              className="btn-outline text-xs"
+            >
+              Copy diagnostics
+            </button>
+          </div>
+        ) : (
+          <div className="relative group mt-3">
+            <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted">
+              {dataDir}
+            </pre>
+          </div>
         )}
       </Section>
 
@@ -419,9 +507,20 @@ ${end}`;
           The standalone <span className="kbd">biturbo-mcp</span> binary speaks MCP over stdio.
           Add it to your agent's MCP config:
         </p>
-        <pre className="mt-3 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted">
-{mcpConfig}
-        </pre>
+        <div className="relative group mt-3">
+          {/* (#254) MCP JSON snippet gets a one-click Copy button. */}
+          <button
+            onClick={() => copy("MCP config", mcpConfig)}
+            className="absolute top-2 right-2 z-10 rounded border border-border-subtle bg-surface-2 p-1.5 text-text-dim opacity-0 transition hover:text-text group-hover:opacity-100"
+            aria-label="Copy MCP config"
+            title="Copy MCP config"
+          >
+            {copied === "MCP config" ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+          </button>
+          <pre className="overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted">
+            {mcpConfig}
+          </pre>
+        </div>
         {mcpBinary && (
           <p className="mt-2 text-xs text-text-dim">
             Resolved binary on this device:{" "}
@@ -479,6 +578,9 @@ ${end}`;
         <p className="text-sm text-text-muted">
           Check for new versions and install them automatically.
         </p>
+        <div className="mt-3 space-y-2 text-sm text-text-muted">
+          <Row k="Current version" v={appVersion ?? "Loading…"} />
+        </div>
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={async () => {
@@ -505,7 +607,17 @@ ${end}`;
           {updateInfo?.available && (
             <button
               onClick={async () => {
+                const ok = await confirm({
+                  title: "Install update and restart?",
+                  body: `biTurbo ${updateInfo.version} will be downloaded and the app will relaunch to finish the update.`,
+                  confirmLabel: "Install and restart",
+                });
+                if (!ok) return;
                 setUpdateInstalling(true);
+                showToast({
+                  kind: "info",
+                  text: "Downloading update — the app will restart automatically",
+                });
                 try {
                   await invoke("install_update");
                 } catch (e) {
@@ -523,9 +635,7 @@ ${end}`;
           )}
         </div>
         {updateInfo?.available && updateInfo.body && (
-          <pre className="mt-3 overflow-x-auto rounded-md border border-border-subtle bg-surface-2 p-3 font-mono text-xs text-text-muted whitespace-pre-wrap">
-{updateInfo.body}
-          </pre>
+          <ReleaseNotes body={updateInfo.body} />
         )}
       </Section>
 
@@ -557,7 +667,7 @@ ${end}`;
 
         <div className="mt-4 space-y-4">
           <RuleBlock
-            label={`project · ${ruleProjectId ?? currentProjectId}`}
+          label={`project · ${ruleProjectName}`}
             text={projectRule}
             copied={copied === "project"}
             onCopy={() => copy("project rule", projectRule)}
@@ -610,6 +720,49 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
+// (#273) Render release notes with minimal safe markdown instead of raw text.
+function ReleaseNotes({ body }: { body: string }) {
+  return (
+    <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-border-subtle bg-surface-2 p-3 text-xs text-text-muted">
+      {body.split("\n").map((line, i) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("# ")) {
+          return (
+            <h4 key={i} className="mt-2 font-medium text-text">
+              {trimmed.slice(2)}
+            </h4>
+          );
+        }
+        if (trimmed.startsWith("## ")) {
+          return (
+            <h5 key={i} className="mt-1 font-medium text-text">
+              {trimmed.slice(3)}
+            </h5>
+          );
+        }
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+          return (
+            <li key={i} className="ml-4 list-disc">
+              {trimmed.slice(2)}
+            </li>
+          );
+        }
+        if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+          return (
+            <code key={i} className="rounded bg-surface-3 px-1">
+              {trimmed.slice(1, -1)}
+            </code>
+          );
+        }
+        if (trimmed.length === 0) {
+          return <div key={i} className="h-2" />;
+        }
+        return <p key={i} className="whitespace-pre-wrap">{line}</p>;
+      })}
+    </div>
+  );
+}
+
 function RuleBlock({
   label,
   text,
@@ -623,6 +776,24 @@ function RuleBlock({
   onCopy: () => void;
   hint?: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = text.split("\n");
+  const hasMore = lines.length > 8;
+  const display = expanded ? text : lines.slice(0, 8).join("\n");
+  const file = `${label.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.md`;
+
+  function onDownload() {
+    const blob = new Blob([text], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="rounded-md border border-border-subtle bg-surface-2 p-3">
       <div className="mb-2 flex items-center gap-2">
@@ -638,10 +809,27 @@ function RuleBlock({
           {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
           {copied ? "Copied" : "Copy"}
         </button>
+        <button
+          onClick={onDownload}
+          className="btn-outline text-xs"
+          title="Download as .md"
+          aria-label="Download as .md"
+        >
+          <Download size={12} />
+        </button>
       </div>
       <pre className="overflow-x-auto rounded bg-bg p-3 font-mono text-[11px] leading-relaxed text-text-muted">
-{text}
+        {/* (#268) Collapse rule blocks to 8 lines with a Show more control. */}
+        {display}
       </pre>
+      {hasMore && (
+        <button
+          onClick={() => setExpanded((s) => !s)}
+          className="mt-2 text-[11px] text-text-dim hover:text-text"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
     </div>
   );
 }
