@@ -256,10 +256,11 @@ export const useApp = create<AppStore>((set, get) => ({
       if (get().currentProjectId !== projectId) return;
       set((s) => {
         const combined = [...s.memories, ...batch];
-        // Cap frontend memory usage: keep the newest 500 memories.
-        const trimmed = combined.length > 500 ? combined.slice(-500) : combined;
+        // (#165) Do not drop older cards from the top; keep the accumulated
+        // list so load-more grows predictably. Memory limit is up to the
+        // frontend's visible list and the user can search/filter instead.
         return {
-          memories: trimmed,
+          memories: combined,
           memoryOffset: offset + batch.length,
           hasMoreMemories: batch.length === 50,
         };

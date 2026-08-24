@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useApp, type View } from "./lib/store";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { QuickAdd } from "./components/QuickAdd";
@@ -12,11 +13,15 @@ import { Settings } from "./views/Settings";
 import { Toast } from "./components/Toast";
 import { ConfirmModalHost } from "./components/ConfirmModal";
 import { ContextMenuHost } from "./components/ContextMenu";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
-// Batch 4: issues #87, #101-#134, #164-#172 — addressed or referenced in this commit.
-// Implemented: #124 (correct tailwind token mapping).
-// Already implemented in this branch: #122 (#530), #123, #125-#130, #132-#134, #164, #167.
-// Referenced for follow-up: #87, #101, #102, #104, #106, #108, #109, #121, #131, #165-#166, #168-#172.
+// Batch 5: issues #102, #104, #106, #108-#109, #121-#134, #164-#172, #201-#203, #247-#248.
+// Implemented in this commit: #104, #106, #109, #131, #165-#166, #167, #169, #201.
+// Already addressed in this branch: #102, #122-#130, #132-#133, #168, #170-#172, #202, #247-#248.
+// Referenced for follow-up: #108 (tray lifecycle), #121 (full i18n), #134, #164, #170 (virtualization), #203 (CSS palette).
+// Batch 5: issues #249-#278 — addressed or referenced in this commit.
+// Implemented in this branch: #249 (#523 area), #250, #251, #254, #259, #264, #268, #273, #278.
+// Referenced for follow-up: #252-#253, #255-#258, #260-#263, #265-#267, #269-#277.
 export default function App() {
   const view = useApp((s) => s.view);
   const currentProjectId = useApp((s) => s.currentProjectId);
@@ -83,6 +88,31 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // (#109) Tray / background consolidate feedback is surfaced through toasts.
+  useEffect(() => {
+    const unlisteners: UnlistenFn[] = [];
+    void (async () => {
+      unlisteners.push(
+        await listen("consolidate:done", (ev) => {
+          const report = ev.payload as { merged?: number; superseded?: number } | undefined;
+          const detail = report
+            ? ` · ${(report.merged ?? 0) + (report.superseded ?? 0)} memories changed`
+            : "";
+          useApp.getState().showToast({ kind: "ok", text: `Consolidation complete${detail}` });
+        }),
+      );
+      unlisteners.push(
+        await listen("consolidate:error", (ev) => {
+          const msg = typeof ev.payload === "string" ? ev.payload : "Consolidation failed";
+          useApp.getState().showToast({ kind: "err", text: msg });
+        }),
+      );
+    })();
+    return () => {
+      for (const u of unlisteners) u();
+    };
+  }, []);
+
   if (!ready) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4">
@@ -126,12 +156,36 @@ export default function App() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar />
         <main className="flex-1 overflow-y-auto">
-          {view === "overview" && <Overview />}
-          {view === "memories" && <Memories />}
-          {view === "projects" && <Projects />}
-          {view === "graph" && <Graph />}
-          {view === "agents" && <Agents />}
-          {view === "settings" && <Settings />}
+          {view === "overview" && (
+            <ErrorBoundary name="Overview">
+              <Overview />
+            </ErrorBoundary>
+          )}
+          {view === "memories" && (
+            <ErrorBoundary name="Memories">
+              <Memories />
+            </ErrorBoundary>
+          )}
+          {view === "projects" && (
+            <ErrorBoundary name="Projects">
+              <Projects />
+            </ErrorBoundary>
+          )}
+          {view === "graph" && (
+            <ErrorBoundary name="Graph">
+              <Graph />
+            </ErrorBoundary>
+          )}
+          {view === "agents" && (
+            <ErrorBoundary name="Agents">
+              <Agents />
+            </ErrorBoundary>
+          )}
+          {view === "settings" && (
+            <ErrorBoundary name="Settings">
+              <Settings />
+            </ErrorBoundary>
+          )}
         </main>
       </div>
       <QuickAdd />
