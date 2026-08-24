@@ -560,25 +560,40 @@ impl AppState {
     pub fn embedder_for_project(&self, project_id: &str) -> BiResult<Arc<Embedder>> {
         let model = {
             let conn = self.db.conn()?;
-            conn.query_row(
+            match conn.query_row(
                 "SELECT COALESCE(embed_model, ?2) FROM projects WHERE id = ?1",
                 rusqlite::params![project_id, crate::embed::DEFAULT_MODEL],
                 |r| r.get::<_, String>(0),
-            )
-            .map_err(|_| BiError::NotFound(format!("project {project_id}")))?
+            ) {
+                Ok(model) => model,
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    return Err(BiError::NotFound(format!("project {project_id}")));
+                }
+                Err(error) => return Err(BiError::Db(error.to_string())),
+            }
         };
         if matches!(model.as_str(), "BGE-small-en" | "BGE-small-en-v1.5") {
             return Ok(self.embedder.clone());
         }
-        if let Some((cached_model, embedder)) = self.project_embedders.read().get(project_id) {
-            if cached_model == &model {
-                return Ok(embedder.clone());
+        {
+            if let Some((cached_model, embedder)) = self.project_embedders.read().get(project_id) {
+                if cached_model == &model {
+                    return Ok(embedder.clone());
+                }
             }
         }
         let embedder = Arc::new(Embedder::new(&model)?);
-        self.project_embedders
-            .write()
-            .insert(project_id.to_string(), (model, embedder.clone()));
+        {
+            let mut cache = self.project_embedders.write();
+            // Double-check after taking the write lock; another thread may have
+            // inserted the same model while we were loading (#419).
+            if let Some((cached_model, cached)) = cache.get(project_id) {
+                if cached_model == &model {
+                    return Ok(cached.clone());
+                }
+            }
+            cache.insert(project_id.to_string(), (model, embedder.clone()));
+        }
         Ok(embedder)
     }
 
