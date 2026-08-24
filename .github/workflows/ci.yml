@@ -86,6 +86,7 @@ jobs:
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
         env:
+  # (#563) Cache embedding models and force CPU EP to keep Ubuntu CI tests stable.
           BITURBO_EMBED_EP: cpu
 
   mcp-smoke:
