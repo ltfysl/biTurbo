@@ -463,7 +463,8 @@ export function Memories() {
                                 kind: "ok",
                                 text: value > 0 ? "Marked useful" : "Marked not useful",
                               }),
-                            );
+                            )
+                            .catch((e) => showToast({ kind: "err", text: friendlyError(e) }));
                         }
                       : undefined
                   }
