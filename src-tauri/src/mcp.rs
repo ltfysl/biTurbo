@@ -213,7 +213,6 @@ const WRITE_TOOLS: &[&str] = &[
     "register_agent",
 ];
 
-
 const MCP_INSTRUCTIONS: &str = r#"## biTurbo Memory Layer
 
 Use `register_agent` and `list_projects` at session start. Before non-trivial work, call `recall_for_context` with the active project. Store only durable facts, decisions, preferences, patterns, episodes, reflections, or indexed code; never store secrets or transient state. Always pass `project_id` to preserve isolation.

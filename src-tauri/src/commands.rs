@@ -6,7 +6,6 @@
 // Issue #330: Static web export of a project's memory dossier.
 // Issue #339: Safe config writes for agent MCP installs (temp + rename already in use).
 
-
 pub use crate::application::{ActivityEntry, AgentEntry, Bootstrap, Stats};
 use crate::error::BiResult;
 use crate::ingest;
