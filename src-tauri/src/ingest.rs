@@ -24,6 +24,9 @@ const MAX_CHUNK_TEXT: usize = 4000;
 /// tree-sitter parse trees dwarf source size and huge generated dumps would
 /// otherwise be fully buffered before rejection.
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+/// Bump this whenever the chunker, grammar versions, or query set change so
+/// unchanged files are re-indexed with the new rules (#403).
+const INDEXER_VERSION: &str = "2";
 /// Group at most this many chunks into one INSERT statement to stay
 /// under SQLite's 32 766 bound-variable limit (15 params per chunk).
 const SQL_INSERT_CHUNK_LIMIT: usize = 2000;
@@ -1140,6 +1143,7 @@ fn parse_one_file(
         return pf;
     }
     let mut hasher = Sha256::new();
+    hasher.update(INDEXER_VERSION.as_bytes());
     hasher.update(&bytes);
     pf.file_hash = hex::encode(hasher.finalize());
     pf.bytes = bytes.len() as u64;
