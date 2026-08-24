@@ -6,6 +6,10 @@ import clsx from "clsx";
 import { friendlyError } from "../lib/format";
 import { Kbd } from "../lib/kbd";
 
+// (#55) The 'code' type is available alongside the other memory types.
+// (#56) A compact project selector lets the user pick the target project.
+// (#58) Importance defaults to 0.6 with a clear numeric readout.
+// (#59) Backdrop and Escape close are ignored while a save is in flight.
 const TYPES = ["fact", "decision", "preference", "pattern", "episode", "reflection", "code"] as const;
 
 export function QuickAdd() {

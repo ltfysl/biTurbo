@@ -16,7 +16,7 @@ import type { ConfirmOptions } from "../components/ConfirmModal";
 import type { ContextMenuItem } from "../components/ContextMenu";
 
 export type View = "overview" | "memories" | "projects" | "graph" | "agents" | "settings";
-export type Theme = "dark" | "light";
+export type Theme = "dark" | "light" | "system";
 
 export interface ToastAction {
   label: string;
@@ -71,6 +71,7 @@ interface AppStore {
   selectMemoryByUid: (uid: string) => Promise<void>;
   memoryOffset: number;
   hasMoreMemories: boolean;
+// (#31) memoriesLoading flag prevents the empty state from flashing before the first fetch completes.
   memoriesLoading: boolean;
   isLoadingMore: boolean;
   loadMoreMemories: () => Promise<void>;
@@ -105,37 +106,69 @@ interface AppStore {
 }
 
 const THEME_KEY = "biturbo.theme";
+const VIEW_KEY = "biturbo.view";
+const PROJECT_KEY = "biturbo.currentProjectId";
 
 function readStoredTheme(): Theme {
   if (typeof window === "undefined") return "dark";
   try {
     const v = window.localStorage.getItem(THEME_KEY);
-    if (v === "light" || v === "dark") return v;
+    if (v === "light" || v === "dark" || v === "system") return v;
   } catch {
     /* ignore */
   }
-  if (typeof window.matchMedia === "function") {
-    if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
-  }
-  return "dark";
+  // Default follows the OS; the UI will treat an unset value as "System".
+  return "system";
 }
 
 function applyThemeToDom(t: Theme) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  if (t === "light") root.classList.add("light");
+  const isLight = t === "light" || (t === "system" && window.matchMedia("(prefers-color-scheme: light)").matches);
+  if (isLight) root.classList.add("light");
   else root.classList.remove("light");
-  root.style.colorScheme = t;
+  root.style.colorScheme = isLight ? "light" : "dark";
+}
+
+const VIEWS: View[] = ["overview", "memories", "projects", "graph", "agents", "settings"];
+
+function readStoredView(): View {
+  if (typeof window === "undefined") return "overview";
+  try {
+    const v = window.localStorage.getItem(VIEW_KEY);
+    if (v && VIEWS.includes(v as View)) return v as View;
+  } catch {
+    /* ignore */
+  }
+  return "overview";
+}
+
+function readStoredProject(): string {
+  if (typeof window === "undefined") return "default";
+  try {
+    const v = window.localStorage.getItem(PROJECT_KEY);
+    if (v) return v;
+  } catch {
+    /* ignore */
+  }
+  return "default";
 }
 
 export const useApp = create<AppStore>((set, get) => ({
-  view: "overview",
-  setView: (v) => set({ view: v }),
+  view: readStoredView(),
+  setView: (v) => {
+    try { window.localStorage.setItem(VIEW_KEY, v); } catch { /* ignore */ }
+    set({ view: v });
+  },
 
   theme: readStoredTheme(),
   setTheme: (t) => {
     try {
-      window.localStorage.setItem(THEME_KEY, t);
+      if (t === "system") {
+        window.localStorage.removeItem(THEME_KEY);
+      } else {
+        window.localStorage.setItem(THEME_KEY, t);
+      }
     } catch {
       /* ignore */
     }
@@ -143,13 +176,17 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ theme: t });
   },
   toggleTheme: () => {
-    const next: Theme = get().theme === "dark" ? "light" : "dark";
+    const order: Theme[] = ["dark", "light", "system"];
+    const next = order[(order.indexOf(get().theme) + 1) % order.length];
     get().setTheme(next);
   },
 
   projects: [],
-  currentProjectId: "default",
-  setCurrentProjectId: (id) => set({ currentProjectId: id, selectedMemoryUid: null }),
+  currentProjectId: readStoredProject(),
+  setCurrentProjectId: (id) => {
+    try { window.localStorage.setItem(PROJECT_KEY, id); } catch { /* ignore */ }
+    set({ currentProjectId: id, selectedMemoryUid: null });
+  },
   refreshProjects: async () => {
     const projects = await api.listProjects();
     set({ projects });
@@ -277,10 +314,10 @@ export const useApp = create<AppStore>((set, get) => ({
     if (get().bootstrapLoaded) return;
     const b = await api.bootstrap();
     const projects = b.projects;
-    const currentProjectId =
-      projects.find((p) => p.indexed_count > 0)?.id ??
-      projects[0]?.id ??
-      "default";
+    const storedProject = get().currentProjectId;
+    const currentProjectId = projects.some((p) => p.id === storedProject)
+      ? storedProject
+      : (projects.find((p) => p.indexed_count > 0)?.id ?? projects[0]?.id ?? "default");
     set({
       stats: b.stats,
       projects,
@@ -347,6 +384,14 @@ export function useContextMenu() {
 if (typeof window !== "undefined") {
   applyThemeToDom(readStoredTheme());
   const unlistens: UnlistenFn[] = [];
+  const schemeMq = window.matchMedia("(prefers-color-scheme: light)");
+  const onSchemeChange = () => {
+    if (useApp.getState().theme === "system") applyThemeToDom("system");
+  };
+  if (schemeMq.addEventListener) {
+    schemeMq.addEventListener("change", onSchemeChange);
+    unlistens.push(() => schemeMq.removeEventListener("change", onSchemeChange));
+  }
   void (async () => {
     unlistens.push(
       await listen<IngestProgress>("ingest:progress", (e) => {
