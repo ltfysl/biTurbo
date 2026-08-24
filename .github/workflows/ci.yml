@@ -139,7 +139,7 @@ jobs:
         env:
           BITURBO_EMBED_EP: cpu
 
-  docs:
+  docs:  # (#398) Verify generated tool docs are up to date.
     name: Generated docs
     runs-on: ubuntu-latest
     steps:

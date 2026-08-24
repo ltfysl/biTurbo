@@ -1,7 +1,7 @@
 # biTurbo MCP Tools
 
 This table is generated from `src-tauri/src/mcp.rs` (`SCHEMAS_JSON`).
-It is the single source of truth for the {total} tools exposed by the MCP server.
+It is the single source of truth for the 34 tools exposed by the MCP server.
 
 Run `python3 scripts/generate_tool_docs.py` to regenerate.
 

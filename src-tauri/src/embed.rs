@@ -1,5 +1,7 @@
 // Issue #304: Token-aware embedding truncation aligned to model context.
 // Issue #340: Embedding-model download verification and pinning.
+// Issue #375: Persistent embedding cache on disk.
+// Issue #376: Apple Silicon acceleration (CoreML / Metal EP).
 
 use crate::error::{BiError, BiResult};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};

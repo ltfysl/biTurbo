@@ -125,7 +125,7 @@ For code signing, set the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE
 target/debug/biturbo-mcp < /dev/null
 ```
 
-Smoke-test all 27 tools against a real binary:
+Smoke-test all 34 tools against a real binary:
 
 ```bash
 pnpm mcp:test
@@ -289,7 +289,7 @@ biTurbo/
 │   │   ├── project.rs            multi-project isolation
 │   │   ├── ingest.rs             tree-sitter project walker
 │   │   ├── consolidate.rs        decay / dedup / merge
-│   │   ├── mcp.rs                stdio MCP server (27 tools)
+│   │   ├── mcp.rs                stdio MCP server (34 tools)
 │   │   ├── scheduler.rs          background consolidate scheduler
 │   │   └── commands.rs           Tauri IPC handlers
 │   └── bin/biturbo_mcp.rs        Standalone MCP server binary

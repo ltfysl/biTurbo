@@ -22,10 +22,31 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 // Batch 5: issues #249-#278 — addressed or referenced in this commit.
 // Implemented in this branch: #249 (#523 area), #250, #251, #254, #259, #264, #268, #273, #278.
 // Referenced for follow-up: #252-#253, #255-#258, #260-#263, #265-#267, #269-#277.
+// Batch 8: issues #341-#353, #356, #359, #362, #364.
+// Implemented in this commit: #343 (per-view document.title updates).
+// Referenced for follow-up: #341 (chat view), #342 (command palette), #344 (operations history),
+//   #345 (consolidation dashboard), #346 (supersession chains), #347 (all-projects browse),
+//   #348 (i18n), #349 (saved searches), #350 (trash/restore), #351 (tag manager),
+//   #352 (bulk actions), #353 (time/access filters), #356 (agent active/age badges),
+//   #359 (agent stats/unregister), #362 (global quick capture), #364 (markdown toggle).
+
 export default function App() {
   // (#334) Global drag-and-drop overlay for folders and .md files pending.
 
   const view = useApp((s) => s.view);
+  // (#343) Sync the browser/window title with the active view.
+  useEffect(() => {
+    const titles: Record<View, string> = {
+      overview: "Overview",
+      memories: "Memories",
+      projects: "Projects",
+      graph: "Graph",
+      agents: "Agents",
+      settings: "Settings",
+    };
+    document.title = `${titles[view]} · biTurbo`;
+  }, [view]);
+
   const currentProjectId = useApp((s) => s.currentProjectId);
   const showToast = useApp((s) => s.showToast);
   const [ready, setReady] = useState(false);

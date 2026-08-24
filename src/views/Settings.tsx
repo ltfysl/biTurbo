@@ -26,6 +26,8 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import clsx from "clsx";
+// (#362) Configurable global hotkey and tray quick-capture settings pending.
+
 export function Settings() {
   const stats = useApp((s) => s.stats);
   const currentProjectId = useApp((s) => s.currentProjectId);

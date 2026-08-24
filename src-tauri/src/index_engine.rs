@@ -1,4 +1,5 @@
 // Issue #382: index persist uses snapshot-under-lock + generation counter (already implemented).
+// Issue #374: ANN index option (HNSW) for very large projects.
 
 use crate::error::{BiError, BiResult};
 use parking_lot::Mutex;

@@ -10,6 +10,9 @@ import clsx from "clsx";
 import { CodeBlock } from "./CodeBlock";
 
 export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () => void }) {
+  // (#346) Supersession chain navigator (timeline + Graph edges) pending.
+  // (#364) Markdown render/source toggle for memory content pending.
+
   // (#357) In-place editing for content, tags, and importance; mem_type selector and project move pending.
 // (#46) Per-uid draft cache preserves unsaved edits when selecting another memory.
 // (#48) ⌘Enter/Ctrl+Enter saves edits and a dirty indicator shows pending changes.

@@ -22,6 +22,8 @@ import type {
   LayoutError,
 } from "./layoutWorker";
 import { friendlyError } from "../lib/format";
+// (#346) Supersession edges between memory nodes pending.
+
 
 type Pos = { x: number; y: number };
 

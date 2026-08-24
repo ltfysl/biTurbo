@@ -4,6 +4,10 @@
 // Issue #289: Streamable HTTP / SSE transport in addition to stdio.
 // Issue #290: Auth token for non-stdio transports.
 // Issue #294: --data-dir flag / BITURBO_DATA_DIR override.
+// Issue #367: npm wrapper package `npx biturbo-mcp`.
+// Issue #372: `biturbo-mcp serve` long-running HTTP / health / systemd mode.
+
+// Issue #376: Apple Silicon acceleration (CoreML / Metal EP).
 
 use anyhow::Result;
 use biturbo_lib::mcp::run_mcp_server_stdio;

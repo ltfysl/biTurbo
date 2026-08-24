@@ -6,7 +6,7 @@ import { timeAgo, friendlyError } from "../lib/format";
 
 const KINDS = ["mavis", "claude-code", "cursor", "cline", "custom"];
 
-// (#360) Agent roster: list and register agents; rename/delete/merge and per-agent write/read stats pending.
+// (#356, #359, #360) Agent roster: register, honest active/age badges; per-agent stats and unregister/delete pending.
 export function Agents() {
   const agents = useApp((s) => s.agents);
   const activity = useApp((s) => s.activity);

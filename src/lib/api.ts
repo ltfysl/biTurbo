@@ -12,6 +12,9 @@ import type {
   Operation,
   RecallResponse,
 } from "./types";
+// (#341) Local chat view endpoints (recall + LLM) pending.
+// (#350) Soft-delete trash and restore endpoints pending.
+
 
 export interface RememberInput {
   content: string;

@@ -1,5 +1,6 @@
 //! System tray: show/hide main window, live stats, consolidate, open data
 //! folder, quit, and hide-on-close.
+// (#362) Configurable global shortcut and always-on-top quick-capture popover pending.
 
 use std::time::Duration;
 
