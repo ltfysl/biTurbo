@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { useApp, useConfirm } from "../lib/store";
+import { useApp, useConfirm, useContextMenu } from "../lib/store";
 import { api } from "../lib/api";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Plus, FolderGit2, Trash2, Database, FileSearch, Loader2, Download, FileText, Radar, FilePlus2 } from "lucide-react";
+import { Plus, FolderGit2, Trash2, Database, FileSearch, Loader2, Download, FileText, Radar, FilePlus2, MoreHorizontal } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import clsx from "clsx";
 
 import { friendlyError } from "../lib/format";
+import type { ContextMenuItem } from "../components/ContextMenu";
+
+// (#194) User-facing toasts always display project names, never raw ids.
 
 // (#60) Embed model is changed through an in-app modal, not window.prompt.
 // (#69) Running ingest jobs can be cancelled with a backend request.
@@ -18,6 +21,7 @@ export function Projects() {
   const setCurrentProjectId = useApp((s) => s.setCurrentProjectId);
   const currentProjectId = useApp((s) => s.currentProjectId);
   const confirm = useConfirm();
+  const showContextMenu = useContextMenu();
 
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -33,6 +37,15 @@ export function Projects() {
 
 
   const activeIngests = Object.values(ingestJobs).filter((j) => j.phase !== "done");
+  const INGEST_PHASE_LABELS: Record<string, string> = {
+    queued: "Starting…",
+    scanning: "Scanning…",
+    parsing: "Parsing…",
+    embedding: "Embedding…",
+    writing: "Writing…",
+    edges: "Building edges…",
+    done: "Done",
+  };
 
   async function pickFolder() {
     try {
@@ -73,6 +86,26 @@ export function Projects() {
     }
   }
 
+  // (#193) One-click default project bootstrap from the empty state.
+  async function createDefault() {
+    setBusy("default");
+    try {
+      const p = await api.createProject({
+        name: "Default",
+        id: "default",
+        description: "Auto-created default project.",
+      });
+      await refreshProjects();
+      await refreshStats();
+      setCurrentProjectId(p.id);
+      showToast({ kind: "ok", text: `Created default project ${p.name}` });
+    } catch (e) {
+      showToast({ kind: "err", text: friendlyError(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function ingest(projectId: string, root: string) {
     if (!root) {
       showToast({ kind: "err", text: "Set a root_path first" });
@@ -89,15 +122,24 @@ export function Projects() {
     }
   }
 
+  // (#189) Stop/cancel a running indexing job with confirmation and refresh stats.
   async function cancelIngest(projectId: string) {
+    const pName = projects.find((p) => p.id === projectId)?.name ?? projectId;
     const jobId = ingestJobIds[projectId];
     if (!jobId) {
-      showToast({ kind: "err", text: "Cannot cancel — job id unknown" });
+      showToast({ kind: "err", text: `Cannot cancel — no active indexing for ${pName}` });
       return;
     }
+    const ok = await confirm({
+      title: `Stop indexing “${pName}”?`,
+      body: "The current indexing run will be cancelled. This may leave the code index partially built.",
+      confirmLabel: "Stop indexing",
+    });
+    if (!ok) return;
     try {
       await api.cancelOperation(jobId);
-      showToast({ kind: "info", text: "Cancellation requested" });
+      showToast({ kind: "info", text: `Indexing cancelled for ${pName}` });
+      await refreshStats();
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
@@ -120,7 +162,7 @@ export function Projects() {
       await api.deleteProject(id);
       await refreshProjects();
       await refreshStats();
-      showToast({ kind: "ok", text: "Deleted" });
+      showToast({ kind: "ok", text: `Deleted ${name}` });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     } finally {
@@ -129,7 +171,8 @@ export function Projects() {
   }
 
   async function importFolder(projectId: string) {
-    const sel = await open({ directory: true, multiple: false, title: `Import folder into ${projectId}` });
+    const pName = projects.find((p) => p.id === projectId)?.name ?? projectId;
+    const sel = await open({ directory: true, multiple: false, title: `Import folder into ${pName}` });
     if (typeof sel !== "string") return;
     setImportingFor(projectId);
     try {
@@ -137,6 +180,7 @@ export function Projects() {
       await refreshProjects();
       await refreshStats();
       if (r.errors.length > 0) {
+        // (#186) Surface per-file import errors in an inline result card with a Copy-all action.
         setImportErrors({ projectId, errors: r.errors });
         showToast({
           kind: "info",
@@ -164,19 +208,30 @@ export function Projects() {
     if (!target) return;
     try {
       const r = await api.exportMemories(projectId, target);
-      showToast({ kind: "ok", text: `Exported ${r.memories_written} memories`, action: { label: "Reveal", onClick: () => { revealItemInDir(r.output_path).catch(() => {}); } } });
+      // (#187) Toast shows the count only; Reveal opens the enclosing folder.
+      showToast({
+        kind: "ok",
+        text: `Exported ${r.memories_written} memories`,
+        action: {
+          label: "Reveal",
+          onClick: () => {
+            revealItemInDir(r.output_path).catch(() => {});
+          },
+        },
+      });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     }
   }
 
   async function toggleWatch(projectId: string, root: string | null, enabled: boolean) {
+    const pName = projects.find((p) => p.id === projectId)?.name ?? projectId;
     try {
       await api.setWatch(projectId, root, enabled);
       await refreshProjects();
       showToast({
         kind: "ok",
-        text: enabled ? `Watching ${projectId} (auto-reingest on changes)` : `Stopped watching ${projectId}`,
+        text: enabled ? `Watching ${pName} (auto-reingest on changes)` : `Stopped watching ${pName}`,
       });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
@@ -185,22 +240,63 @@ export function Projects() {
 
   const [repairing, setRepairing] = useState<string | null>(null);
 
+  // (#194) Marker-file toasts reference the project name, not the raw id.
   async function repairMarkerFiles(projectId: string) {
     setRepairing(projectId);
     try {
+      const p = projects.find((pr) => pr.id === projectId);
+      const pName = p?.name ?? projectId;
       const r = await api.ensureProjectMarkerFiles(projectId);
-      const root = projects.find((pr) => pr.id === projectId)?.root_path ?? "";
+      const root = p?.root_path ?? "";
       showToast({
         kind: "ok",
         text: r.created.length
-          ? `Marker files created in ${root || projectId}: ${r.created.join(", ")}`
-          : `Marker files already present in ${root || projectId}`,
+          ? `Marker files created in ${root || pName}: ${r.created.join(", ")}`
+          : `Marker files already present in ${root || pName}`,
       });
     } catch (e) {
       showToast({ kind: "err", text: friendlyError(e) });
     } finally {
       setRepairing(null);
     }
+  }
+
+  // (#191) Overflow menu groups the secondary project actions so the card stays compact.
+  function openActionsMenu(
+    e: { clientX: number; clientY: number },
+    p: typeof projects[number],
+  ) {
+    const items: ContextMenuItem[] = [
+      {
+        label: "Import .md folder",
+        icon: <FileText size={12} />,
+        disabled: !p.root_path || importingFor === p.id,
+        onClick: () => { if (p.root_path) void importFolder(p.id); },
+      },
+      {
+        label: "Export",
+        icon: <Download size={12} />,
+        onClick: () => { void exportProject(p.id); },
+      },
+      {
+        label: "Generate marker files",
+        icon: <FilePlus2 size={12} />,
+        disabled: !p.root_path || repairing === p.id,
+        onClick: () => { if (p.root_path) void repairMarkerFiles(p.id); },
+      },
+      {
+        label: p.watch_enabled ? "Unwatch" : "Watch",
+        icon: <Radar size={12} />,
+        disabled: !p.root_path,
+        onClick: () => { if (p.root_path) void toggleWatch(p.id, p.root_path, !p.watch_enabled); },
+      },
+      {
+        label: "Set embed model",
+        icon: <Database size={12} />,
+        onClick: () => { void setModelEdit({ id: p.id, name: p.name, current: p.embed_model }); },
+      },
+    ];
+    showContextMenu(e.clientX, e.clientY, items);
   }
 
     // (#67) Project edit (name, description, root_path) is not yet exposed from the GUI.
@@ -253,6 +349,7 @@ export function Projects() {
       </div>
 
       {projects.length === 0 && !creating && (
+        // (#193) Empty state with a create-first-project CTA and one-click default bootstrap.
         <div className="card flex flex-col items-center justify-center p-12 text-center">
           <FolderGit2 size={28} className="mb-3 text-text-dim" />
           <div className="font-serif text-lg">No projects yet</div>
@@ -261,9 +358,18 @@ export function Projects() {
             project, point it at a repo, and run Re-index — then connect an agent via
             Settings → MCP.
           </p>
-          <button onClick={() => setCreating(true)} className="btn-primary mt-4">
-            <Plus size={14} /> Create your first project
-          </button>
+          <div className="mt-4 flex items-center gap-2">
+            <button onClick={() => setCreating(true)} className="btn-primary">
+              <Plus size={14} /> Create your first project
+            </button>
+            <button
+              onClick={() => void createDefault()}
+              disabled={busy === "default"}
+              className="btn-outline"
+            >
+              {busy === "default" ? "Creating…" : "Use default"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -274,12 +380,7 @@ export function Projects() {
             <div className="mb-2 flex items-center gap-2 text-sm">
               <Loader2 size={14} className="animate-spin text-accent" />
               <span className="font-medium text-text">
-                {pName} · {j.phase === "scanning" && "Scanning…"}
-                {j.phase === "parsing" && "Parsing…"}
-                {j.phase === "embedding" && "Embedding…"}
-                {j.phase === "writing" && "Writing…"}
-                {j.phase === "edges" && "Building edges…"}
-                {j.phase === "done" && "Done"}
+                {pName} · {INGEST_PHASE_LABELS[j.phase] ?? `Ingesting (${j.phase})…`}
               </span>
               {j.total > 0 && j.phase !== "done" && (
                 <span className="ml-auto font-mono text-xs text-text-muted">
@@ -292,7 +393,7 @@ export function Projects() {
                   className="btn-ghost ml-auto shrink-0 px-2 py-0.5 text-[11px]"
                   title="Request cancellation of this indexing run"
                 >
-                  Cancel
+                  Stop
                 </button>
               )}
             </div>
@@ -314,15 +415,25 @@ export function Projects() {
       })}
 
       {importErrors && (
+        // (#186) Import errors are surfaced with a Copy-all action in an inline result card.
         <div className="card border-warning/40 p-4">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-text">
-              Import of {importErrors.projectId} finished with {importErrors.errors.length}{" "}
+            <span className="flex-1 text-sm font-medium text-text">
+              Import of {projects.find((p) => p.id === importErrors.projectId)?.name ?? importErrors.projectId} finished with {importErrors.errors.length}{" "}
               {importErrors.errors.length === 1 ? "error" : "errors"}
             </span>
             <button
+              onClick={() => {
+                void navigator.clipboard?.writeText(importErrors.errors.join("\n"));
+              }}
+              className="btn-ghost px-2 py-0.5 text-[11px]"
+              title="Copy all errors to the clipboard"
+            >
+              Copy all
+            </button>
+            <button
               onClick={() => setImportErrors(null)}
-              className="btn-ghost ml-auto px-2 py-0.5 text-[11px]"
+              className="btn-ghost px-2 py-0.5 text-[11px]"
             >
               Dismiss
             </button>
@@ -338,6 +449,7 @@ export function Projects() {
       )}
 
       {creating && (
+        // (#190) New project form has explicit label/input association, Enter-to-submit, and duplicate-name validation.
         <form
           className="card space-y-3 p-5"
           onSubmit={(e) => {
@@ -348,10 +460,11 @@ export function Projects() {
           <h3 className="font-serif text-lg">New project</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
+              <label htmlFor="project-name" className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
                 Name
               </label>
               <input
+                id="project-name"
                 value={name}
                 onChange={(e) => {
                   setName(e.target.value);
@@ -368,10 +481,11 @@ export function Projects() {
               )}
             </div>
             <div>
-              <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
+              <label htmlFor="project-desc" className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
                 Description
               </label>
               <input
+                id="project-desc"
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
                 placeholder="Laravel rewrite of QA studio"
@@ -380,11 +494,12 @@ export function Projects() {
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
+            <label htmlFor="project-root" className="mb-1 block text-[11px] uppercase tracking-widest text-text-dim">
               Root path (for code indexing)
             </label>
             <div className="flex gap-2">
               <input
+                id="project-root"
                 value={rootPath}
                 onChange={(e) => setRootPath(e.target.value)}
                 placeholder="/Users/you/Code/project"
@@ -479,6 +594,7 @@ export function Projects() {
                 </div>
               </div>
 
+              {/* (#191) Primary: Switch/Re-index; secondary: overflow menu; (#192) delete has an aria-label. */}
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
                 {!active && (
                   <button
@@ -499,53 +615,12 @@ export function Projects() {
                   </button>
                 )}
                 <button
-                  onClick={() => importFolder(p.id)}
-                  disabled={importingFor === p.id}
+                  onClick={(e) => openActionsMenu(e, p)}
                   className="btn-outline"
-                  title="Import all .md/.txt files in a folder as memories"
+                  title="More project actions"
+                  aria-label="More actions"
                 >
-                  <FileText size={12} />
-                  {importingFor === p.id ? "Importing…" : "Import .md folder"}
-                </button>
-                <button
-                  onClick={() => exportProject(p.id)}
-                  className="btn-outline"
-                  title="Export all memories of this project to JSON"
-                >
-                  <Download size={12} /> Export
-                </button>
-                {p.root_path && (
-                  <button
-                    onClick={() => repairMarkerFiles(p.id)}
-                    disabled={repairing === p.id}
-                    className="btn-outline"
-                    title="Creates the marker file agents read to resolve this project (.biTurbo) plus the ignore file, inside this project's root"
-                  >
-                    <FilePlus2 size={12} />
-                    {repairing === p.id ? "Generating…" : "Generate marker files"}
-                  </button>
-                )}
-                {p.root_path && (
-                  <button
-                    onClick={() => toggleWatch(p.id, p.root_path, !p.watch_enabled)}
-                    className={clsx(
-                      "btn-outline",
-                      p.watch_enabled && "border-success/40 text-success"
-                    )}
-                    title={p.watch_enabled ? "Stop watching for changes" : "Watch for changes; auto-reingest on file events"}
-                  >
-                    <Radar size={12} />
-                    {p.watch_enabled ? "Unwatch" : "Watch"}
-                  </button>
-                )}
-                <button
-                  onClick={() =>
-                    setModelEdit({ id: p.id, name: p.name, current: p.embed_model })
-                  }
-                  className="btn-outline"
-                  title="Set preferred embedding model for this project"
-                >
-                  embed model
+                  <MoreHorizontal size={12} /> Actions
                 </button>
                 <div className="flex-1" />
                 {p.id !== "default" && (
@@ -554,6 +629,7 @@ export function Projects() {
                     disabled={busy === p.id}
                     className="btn-ghost text-danger hover:bg-danger/10"
                     title="Delete project"
+                    aria-label={`Delete project ${p.name}`}
                   >
                     <Trash2 size={12} />
                   </button>

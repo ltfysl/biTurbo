@@ -645,6 +645,7 @@ fn tool_schemas() -> Value {
     serde_json::from_str(SCHEMAS_JSON).expect("MCP tool schemas must be valid JSON")
 }
 
+// (#398) SCHEMAS_JSON is the single source of truth for all 34 MCP tools.
 const SCHEMAS_JSON: &str = r#"[
 {"name":"remember","description":"Store a memory. mem_type: fact|decision|preference|pattern|episode|reflection|code.","inputSchema":{"type":"object","required":["content"],"properties":{"content":{"type":"string"},"mem_type":{"type":"string"},"project_id":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"importance":{"type":"number"},"source_agent":{"type":"string"},"supersedes":{"type":"string"}}}},
 {"name":"forget","description":"Delete a memory by uid.","inputSchema":{"type":"object","required":["uid"],"properties":{"uid":{"type":"string"}}}},

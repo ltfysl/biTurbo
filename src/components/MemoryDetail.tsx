@@ -31,6 +31,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const baselineCache = useRef(new Map<string, { content: string; tags: string; imp: number; mem_type: string }>());
   const prevUidRef = useRef(memory.uid);
   const lastUpdatedAtRef = useRef(memory.updated_at);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const refreshMemories = useApp((s) => s.refreshMemories);
   const refreshTags = useApp((s) => s.refreshTags);
   const refreshStats = useApp((s) => s.refreshStats);
@@ -38,6 +39,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
   const setSelected = useApp((s) => s.setSelectedMemoryUid);
   const selectMemoryByUid = useApp((s) => s.selectMemoryByUid);
   const confirm = useConfirm();
+  const projects = useApp((s) => s.projects);
 
   useEffect(() => {
     baselineCache.current.set(memory.uid, {
@@ -91,6 +93,15 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
     }
     lastUpdatedAtRef.current = memory.updated_at;
   }, [memory.updated_at, editing]);
+  // (#173) Auto-grow the edit textarea to its content, capped at ~60% of the viewport.
+  useEffect(() => {
+    if (!editing) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    const max = Math.round(window.innerHeight * 0.6);
+    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
+  }, [draft, editing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +205,9 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
   const meta = MEM_TYPE_META[memory.mem_type] ?? MEM_TYPE_META.fact;
   const dots = importanceDots(memory.importance);
+  // (#174) Resolve project_id to the project name; keep the raw id in a tooltip.
+  const project = projects.find((p) => p.id === memory.project_id);
+  const projectName = project?.name ?? memory.project_id;
   const isCode = memory.mem_type === "code";
   const bodyContent = isCode
     ? stripLeadingPathComment(memory.content, memory.file_path)
@@ -241,16 +255,41 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
       <div className="flex-1 overflow-y-auto p-4">
         {editing ? (
           <textarea
+            ref={textareaRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              // (#177) Escape cancels (confirm if dirty); Cmd/Ctrl+S saves.
               if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                 e.preventDefault();
                 void save();
+                return;
+              }
+              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+                e.preventDefault();
+                if (!saving && !conflict && dirty && draft.trim()) {
+                  void save();
+                }
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                if (dirty) {
+                  void (async () => {
+                    const ok = await confirm({
+                      title: "Discard changes?",
+                      body: "Unsaved edits will be lost.",
+                      confirmLabel: "Discard",
+                    });
+                    if (!ok) return;
+                    setEditing(false);
+                  })();
+                } else {
+                  setEditing(false);
+                }
               }
             }}
-            rows={8}
-            className="input resize-none font-sans text-sm"
+            className="input resize-y overflow-y-auto min-h-32 max-h-[60vh] font-sans text-sm"
             autoFocus
           />
         ) : isCode ? (
@@ -434,7 +473,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
 
         {/* Metadata grid */}
         <div className="mt-5 grid grid-cols-2 gap-3 border-t border-border-subtle pt-4 text-xs">
-          <Meta label="Project" value={memory.project_id} mono />
+          <Meta label="Project" value={projectName} mono title={memory.project_id} />
           <Meta label="Source" value={memory.source_agent ?? "—"} mono />
           <Meta label="Created" value={shortDate(memory.created_at)} mono />
           <Meta label="Updated" value={shortDate(memory.updated_at)} mono />

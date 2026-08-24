@@ -73,6 +73,7 @@ ctx.onmessage = (ev: MessageEvent<LayoutRequest>) => {
         ctx.postMessage(msg);
       },
     );
+    // (#198) Worker reports elapsedMs for backend logging; it is not shown in the production toolbar.
     const msg: LayoutResult = {
       type: "result",
       requestId: req.requestId,

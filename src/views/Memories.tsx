@@ -54,7 +54,7 @@ export function Memories() {
   const pendingTypeFilter = useApp((s) => s.pendingTypeFilter);
   const setTypeFilter = useApp((s) => s.setTypeFilter);
 
-  // A type clicked on Overview pre-applies here, then clears.
+  // (#182) A type clicked on Overview pre-applies here, then clears.
   useEffect(() => {
     if (!pendingTypeFilter) return;
     setActiveTypes(new Set([pendingTypeFilter]));

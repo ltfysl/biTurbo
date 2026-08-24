@@ -1,10 +1,39 @@
+import { useState, useMemo } from "react";
 import { useApp } from "../lib/store";
 import { MemoryCard } from "../components/MemoryCard";
 import { Heatmap } from "../components/Heatmap";
-import { Sparkles, Activity, Database, FolderGit2, Bot, ArrowUpRight } from "lucide-react";
-import { bytes, MEM_TYPE_META } from "../lib/format";
-import { useMemo } from "react";
+import {
+  Sparkles,
+  Activity,
+  Database,
+  FolderGit2,
+  Bot,
+  ArrowUpRight,
+  Pencil,
+  Search,
+  Trash2,
+  FolderPlus,
+  FolderMinus,
+  Download,
+  RefreshCw,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { bytes, MEM_TYPE_META, timeAgo } from "../lib/format";
+import clsx from "clsx";
 import { Kbd } from "../lib/kbd";
+import type { ActivityEntry } from "../lib/types";
+
+const DAY_MS = 24 * 3600 * 1000;
+
+const ACTION_ICONS: Record<string, LucideIcon> = {
+  read: Search,
+  write: Pencil,
+  forget: Trash2,
+  create_project: FolderPlus,
+  delete_project: FolderMinus,
+  import_folder: Download,
+  consolidate: RefreshCw,
+};
 
 export function Overview() {
   const stats = useApp((s) => s.stats);
@@ -17,6 +46,18 @@ export function Overview() {
   const selectedMemoryUid = useApp((s) => s.selectedMemoryUid);
   const projects = useApp((s) => s.projects);
   const agents = useApp((s) => s.agents);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
+
+  const currentProject = useMemo(
+    () => projects.find((p) => p.id === currentProjectId),
+    [projects, currentProjectId]
+  );
+
+  const liveAgents = useMemo(
+    () => agents.filter((a) => Date.now() - a.last_seen < 24 * 60 * 60 * 1000).length,
+    [agents]
+  );
+
   const recent = useMemo(
     () =>
       [...memories]
@@ -26,13 +67,13 @@ export function Overview() {
     [memories, currentProjectId]
   );
 
-  // Build 12-week heatmap from activity
+  // (#179) Build 12-week heatmap from activity; store fetches 1000 records to cover the 84-day grid.
   const heatmap = useMemo(() => {
     const days = 12 * 7;
     const now = Date.now();
     const buckets = new Array(days).fill(0);
     for (const a of activity) {
-      const idx = days - 1 - Math.floor((now - a.created_at) / (24 * 3600 * 1000));
+      const idx = days - 1 - Math.floor((now - a.created_at) / DAY_MS);
       if (idx >= 0 && idx < days) buckets[idx]++;
     }
     return buckets;
@@ -50,6 +91,33 @@ export function Overview() {
     reflection: "bg-[var(--type-reflection-dot)]",
     code: "bg-[var(--type-code-dot)]",
   };
+
+  const recentActivity = useMemo(() => {
+    const list = [...activity].sort((a, b) => b.created_at - a.created_at);
+    if (selectedDay == null) return list.slice(0, 20);
+    return list
+      .filter((a) => a.created_at >= selectedDay && a.created_at < selectedDay + DAY_MS)
+      .slice(0, 20);
+  }, [activity, selectedDay]);
+
+  const groupedActivity = useMemo(() => {
+    const groups: { key: number; label: string; items: ActivityEntry[] }[] = [];
+    for (const e of recentActivity) {
+      const dayKey = Math.floor(e.created_at / DAY_MS);
+      const last = groups[groups.length - 1];
+      if (!last || last.key !== dayKey) {
+        const label = new Date(dayKey * DAY_MS).toLocaleDateString(undefined, {
+          weekday: "long",
+          month: "short",
+          day: "numeric",
+        });
+        groups.push({ key: dayKey, label, items: [e] });
+      } else {
+        last.items.push(e);
+      }
+    }
+    return groups;
+  }, [recentActivity]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-8 animate-fade_in">
@@ -99,30 +167,36 @@ export function Overview() {
       )}
 
       {/* (#396) Usage insights: basic stats/heatmap; add per-agent trends, recall hit-rate, dead-memory prune. */}
+      {/* (#183) StatCard hints now read agents and the active project's bit_width. */}
+      {/* (#184) Skeleton placeholders while stats is still loading. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard
           icon={Database}
           label="Memories"
           value={(stats?.total_memories ?? 0).toLocaleString()}
           hint={`${stats?.recent_writes_7d ?? 0} this week`}
+          loading={!stats}
         />
         <StatCard
           icon={FolderGit2}
           label="Projects"
           value={(stats?.total_projects ?? 0).toLocaleString()}
           hint={`${(stats?.by_project ?? []).filter(([, n]) => n > 0).length} active`}
+          loading={!stats}
         />
         <StatCard
           icon={Bot}
           label="Agents"
           value={(stats?.total_agents ?? 0).toLocaleString()}
-          hint={`${stats?.recent_reads_7d ?? 0} searches · 7d`}
+          hint={`${agents.length} registered · ${liveAgents} live`}
+          loading={!stats}
         />
         <StatCard
           icon={Activity}
           label="Index size"
           value={bytes(stats?.index_bytes ?? 0)}
-          hint="turbovec · bit_width=4"
+          hint={`turbovec · ${currentProject?.bit_width ?? 4}-bit`}
+          loading={!stats}
         />
       </div>
 
@@ -150,6 +224,7 @@ export function Overview() {
                 <button
                   key={t}
                   onClick={() => {
+                    // (#182) Pre-apply the selected type and switch to Memories.
                     setTypeFilter(t);
                     setView("memories");
                   }}
@@ -179,6 +254,7 @@ export function Overview() {
         </div>
 
         {/* (#358) Activity feed: heatmap over 12 weeks; dedicated filtered event list and live tail pending. */}
+        {/* (#181) Click a heatmap cell to filter the Recent activity feed by that day. */}
         <div className="card p-5">
           <div className="mb-4 flex items-baseline justify-between">
             <h3 className="font-serif text-lg">Activity · 12 weeks</h3>
@@ -187,7 +263,7 @@ export function Overview() {
             </span>
           </div>
           <div className="overflow-x-auto">
-            <Heatmap values={heatmap} weeks={12} />
+            <Heatmap values={heatmap} onCellClick={(ts) => setSelectedDay(ts)} />
           </div>
           <div className="mt-4 flex items-center gap-2 text-[10px] text-text-dim">
             <span>less</span>
@@ -201,6 +277,72 @@ export function Overview() {
             <span>more</span>
           </div>
         </div>
+      </div>
+
+      {/* (#185) Recent activity feed: icon per action, agent, time, click-through to memory. */}
+      <div className="card p-5">
+        <div className="mb-4 flex items-baseline justify-between">
+          <h3 className="font-serif text-lg">Recent activity</h3>
+          <div className="flex items-center gap-2">
+            {selectedDay && (
+              <button
+                onClick={() => setSelectedDay(null)}
+                className="text-[10px] text-text-dim hover:text-accent"
+              >
+                clear
+              </button>
+            )}
+            <span className="font-mono text-[10px] text-text-dim">
+              {recentActivity.length} events
+            </span>
+          </div>
+        </div>
+        {groupedActivity.length === 0 ? (
+          <div className="text-sm text-text-dim">No recent activity.</div>
+        ) : (
+          <div className="space-y-4">
+            {groupedActivity.map((g) => (
+              <div key={g.key}>
+                <div className="mb-1.5 text-[10px] uppercase tracking-wider text-text-dim">
+                  {g.label}
+                </div>
+                <div className="space-y-1.5">
+                  {g.items.map((e) => {
+                    const agent = e.agent_id
+                      ? agents.find((a) => a.id === e.agent_id)
+                      : null;
+                    const Icon = ACTION_ICONS[e.action] ?? Activity;
+                    return (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => {
+                          if (!e.memory_uid) return;
+                          setSelected(e.memory_uid);
+                          setView("memories");
+                        }}
+                        className={clsx(
+                          "flex w-full items-center gap-2 text-left text-xs",
+                          e.memory_uid
+                            ? "text-text hover:text-accent"
+                            : "cursor-default text-text-dim"
+                        )}
+                      >
+                        <Icon size={13} className="shrink-0 text-text-dim" />
+                        <span className="capitalize">{e.action.replace(/_/g, " ")}</span>
+                        <span className="text-text-dim">·</span>
+                        <span className="text-text-dim">{agent?.name ?? "gui"}</span>
+                        <span className="ml-auto shrink-0 text-text-dim">
+                          {timeAgo(e.created_at)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Recent memories */}
@@ -247,12 +389,14 @@ function StatCard({
   label,
   value,
   hint,
+  loading,
 }: {
-  icon: import("lucide-react").LucideIcon;
+  icon: LucideIcon;
 } & {
   label: string;
-  value: string;
+  value?: string;
   hint?: string;
+  loading?: boolean;
 }) {
   return (
     <div className="card p-4">
@@ -260,8 +404,16 @@ function StatCard({
         <Icon size={13} />
         <span className="text-[11px] uppercase tracking-widest">{label}</span>
       </div>
-      <div className="mt-1.5 font-serif text-2xl font-medium text-text">{value}</div>
-      {hint && <div className="mt-0.5 font-mono text-[10px] text-text-dim">{hint}</div>}
+      {loading || value === undefined ? (
+        <div className="mt-1.5 h-7 w-24 animate-pulse rounded bg-surface-2" />
+      ) : (
+        <div className="mt-1.5 font-serif text-2xl font-medium text-text">{value}</div>
+      )}
+      {loading ? (
+        <div className="mt-0.5 h-3 w-16 animate-pulse rounded bg-surface-2" />
+      ) : (
+        hint && <div className="mt-0.5 font-mono text-[10px] text-text-dim">{hint}</div>
+      )}
     </div>
   );
 }
