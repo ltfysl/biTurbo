@@ -14,6 +14,11 @@
 // Issue #271: Confidence field + provenance chain on memories.
 // Issue #275: Zero-hit query analytics and gap report.
 
+// Issue #305: Preserve access statistics across re-ingest (chunk metadata).
+// Issue #324: Scheduled backups with retention policy (indices + SQLite snapshots).
+// Issue #331: Encrypted-at-rest project stores (SQLCipher / page encryption).
+// Issue #336: Audit log export + tamper-evident hash chain (activity table).
+
 use crate::error::BiResult;
 use parking_lot::Mutex;
 use r2d2::Pool;

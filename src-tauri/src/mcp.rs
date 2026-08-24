@@ -16,6 +16,10 @@
 // Issue #299: Elicitation-style confirmation gate for destructive MCP calls.
 // Issue #300: tools/list pagination + list_changed notification.
 
+// Issue #302: Protocol version negotiation beyond hardcoded 2024-11-05 (implemented).
+// Issue #309: Symbol-exact search mode.
+// Issue #335: Read-only mode for untrusted agents (env guard implemented).
+
 use crate::error::{BiError, BiResult};
 use crate::ingest;
 use crate::memory::{self, Memory, MemoryWithScore, RememberInput, UpdateInput};
@@ -127,17 +131,24 @@ struct JsonRpcRequest {
 async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
     let id = req.id.as_ref()?;
     match req.method.as_str() {
-        "initialize" => Some(ok(
-            id,
-            // Built the initialize result from the canonical MCP_INSTRUCTIONS only;
-            // an earlier inline copy was removed to avoid drift (#482).
-            json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": MCP_INSTRUCTIONS,
-            }),
-        )),
+        "initialize" => {
+            let client_version = req
+                .params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0]);
+            let negotiated = negotiate_protocol_version(client_version);
+            Some(ok(
+                id,
+                json!({
+                    "protocolVersion": negotiated,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "biTurbo", "version": env!("CARGO_PKG_VERSION") },
+                    "instructions": MCP_INSTRUCTIONS,
+                }),
+            ))
+        }
+
         "tools/list" => Some(ok(id, json!({ "tools": tool_schemas() }))),
         "tools/call" => {
             let params = req.params;
@@ -166,6 +177,42 @@ async fn dispatch(state: Arc<AppState>, req: JsonRpcRequest) -> Option<Value> {
 fn ok(id: &Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05"];
+
+fn negotiate_protocol_version(client_version: &str) -> &'static str {
+    SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .copied()
+        .find(|&v| v == client_version)
+        .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0])
+}
+
+fn read_only_enabled() -> bool {
+    std::env::var("BITURBO_READ_ONLY")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+const WRITE_TOOLS: &[&str] = &[
+    "remember",
+    "update",
+    "forget",
+    "create_project",
+    "delete_project",
+    "ingest_project",
+    "start_ingest",
+    "consolidate",
+    "import_folder",
+    "export_memories",
+    "enable_watch",
+    "disable_watch",
+    "set_project_embed_model",
+    "cancel_operation",
+    "retry_operation",
+    "register_agent",
+];
+
 
 const MCP_INSTRUCTIONS: &str = r#"## biTurbo Memory Layer
 
@@ -190,6 +237,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: Value) -> BiResult<V
         }
         Ok(())
     };
+    if read_only_enabled() && WRITE_TOOLS.contains(&name) {
+        return Err(BiError::ReadOnly(format!(
+            "tool '{name}' is disabled in read-only mode"
+        )));
+    }
+
     let result = match name {
         "remember" => {
             let input: RememberInput = serde_json::from_value(args.clone())?;

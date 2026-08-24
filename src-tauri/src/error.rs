@@ -34,6 +34,9 @@ pub enum BiError {
 
     #[error("internal: {0}")]
     Internal(String),
+
+    #[error("read-only: {0}")]
+    ReadOnly(String),
 }
 
 impl From<rusqlite::Error> for BiError {

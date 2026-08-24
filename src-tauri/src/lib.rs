@@ -3,6 +3,7 @@
 // Issue #393: add Criterion benchmarks for cold-start, recall, ingest, consolidate.
 // Issue #295: Config file support (config.toml) for runtime knobs.
 
+// Issue #337: Content Security Policy hardening in tauri.conf.json (policy already set).
 //!
 //! Architecture
 //! ────────────

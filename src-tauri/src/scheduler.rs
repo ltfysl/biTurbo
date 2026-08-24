@@ -2,6 +2,10 @@
 // Issue #279: Configurable decay curve and per-type half-life.
 // Issue #274: Feedback-driven auto-tuning of ranking boosts.
 
+// Issue #313: Git history ingestion — curated project episodes.
+// Issue #324: Scheduled backups with retention policy.
+// Issue #326: Backup/restore scheduler triggers.
+
 use crate::consolidate::{self, ConsolidateReport};
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};

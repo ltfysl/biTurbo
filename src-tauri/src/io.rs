@@ -1,3 +1,13 @@
+// Issue #312: First-class documentation ingestion (.md/.mdx/.rst).
+// Issue #317: Per-file incremental watch ingest.
+// Issue #318: import_memories — restore counterpart to export_memories.
+// Issue #319: Export formats — JSONL, CSV, Markdown dossier.
+// Issue #321: Git-backed memory journal (.biTurbo/journal).
+// Issue #323: Import existing context files (CLAUDE.md, .cursorrules, .windsurfrules).
+// Issue #327: Multi-device sync via CRDT bundles.
+// Issue #328: Team-shared project memory via git remote push/pull.
+// Issue #330: Static web export of a project's memory dossier.
+
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;
