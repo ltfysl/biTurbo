@@ -113,6 +113,7 @@ async function main() {
   let exitCode = 1;
   const projectId = `watch-test-${Date.now().toString(36)}`;
   const testDir = makeDataDir();
+  // (#541) Use a temp-dir fixture and always remove it in the finally block.
 
   try {
     await client.initialize();
