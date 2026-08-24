@@ -23,6 +23,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 // Implemented in this branch: #249 (#523 area), #250, #251, #254, #259, #264, #268, #273, #278.
 // Referenced for follow-up: #252-#253, #255-#258, #260-#263, #265-#267, #269-#277.
 export default function App() {
+  // (#334) Global drag-and-drop overlay for folders and .md files pending.
+
   const view = useApp((s) => s.view);
   const currentProjectId = useApp((s) => s.currentProjectId);
   const showToast = useApp((s) => s.showToast);
@@ -59,7 +61,7 @@ export default function App() {
     refreshGraph().catch(() => {});
   }, [currentProjectId, ready, refreshMemories, refreshTags, refreshGraph]);
 
-  // Global keyboard (#16): number keys 1-6 switch views; mod+K opens QuickAdd; mod+/ focuses search.
+  // Global keyboard (#16, #338): 1-6 / mod+K / mod+/ bound; j/k nav, edit/forget, theme, and '?' cheatsheet pending.
   useEffect(() => {
     const viewOrder: View[] = ["overview", "memories", "projects", "graph", "agents", "settings"];
     const onKey = (e: KeyboardEvent) => {

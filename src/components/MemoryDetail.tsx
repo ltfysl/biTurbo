@@ -296,7 +296,7 @@ export function MemoryDetail({ memory, onClose }: { memory: Memory; onClose: () 
           />
         ) : isCode ? (
           <div className="relative">
-            <CodeBlock code={bodyContent} maxLines={collapsed ? CODE_COLLAPSE_LINES : undefined} showCopy />
+            <CodeBlock code={bodyContent} language={memory.language ?? undefined} maxLines={collapsed ? CODE_COLLAPSE_LINES : undefined} showCopy />
             {collapsed && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 rounded-b-md bg-gradient-to-t from-surface to-transparent" />
             )}

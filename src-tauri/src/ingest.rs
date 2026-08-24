@@ -1,3 +1,15 @@
+// Issue #303: Overlapping chunk windows for long definitions.
+// Issue #304: Token-aware embedding truncation aligned to model context.
+// Issue #305: Preserve access statistics across re-ingest.
+// Issue #307: Import-edge extraction for bash/sql/r/powershell/html.
+// Issue #308: Call- and extends-edge extraction from tree-sitter queries.
+// Issue #309: Symbol-exact search index from @def captures.
+// Issue #311: Expand language support (Elixir, Haskell, OCaml, Zig, Julia, Solidity).
+// Issue #312: First-class documentation ingestion (.md/.mdx/.rst).
+// Issue #314: Dependency-manifest parsing -> automatic stack facts.
+// Issue #316: Ingest dry-run mode.
+// Issue #317: Per-file incremental watch ingest.
+
 use crate::db::{self, log_activity};
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;

@@ -7,6 +7,8 @@
 // Issue #276: Memory templates (ADR-style decision records).
 // Issue #297: batch_remember — bulk memory writes in one call.
 
+// Issue #332: Secret scrubber for remember / update / import paths.
+
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;

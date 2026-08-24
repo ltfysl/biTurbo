@@ -1,6 +1,8 @@
 // Issue #266: TTL & archive policies per memory type.
 // Issue #279: Configurable decay curve and per-type half-life.
 // Issue #274: Feedback-driven auto-tuning of ranking boosts.
+// Issue #321: Git-backed memory journal output from consolidate/export.
+
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
 use crate::memory;

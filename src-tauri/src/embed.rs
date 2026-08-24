@@ -1,3 +1,6 @@
+// Issue #304: Token-aware embedding truncation aligned to model context.
+// Issue #340: Embedding-model download verification and pinning.
+
 use crate::error::{BiError, BiResult};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use hex;

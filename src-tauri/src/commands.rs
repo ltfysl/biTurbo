@@ -1,4 +1,10 @@
 //! Tauri IPC commands. The frontend calls these via `invoke<T>("name", { args })`.
+// Issue #319: Export formats — JSONL, CSV, Markdown dossier.
+// Issue #322: Generate agent rules files (claude_md, agents_md, cursorrules, windsurf_rules).
+// Issue #323: Import existing context files (CLAUDE.md, .cursorrules, .windsurfrules).
+// Issue #326: One-click backup / restore UI in Settings.
+// Issue #330: Static web export of a project's memory dossier.
+// Issue #339: Safe config writes for agent MCP installs (temp + rename already in use).
 
 pub use crate::application::{ActivityEntry, AgentEntry, Bootstrap, Stats};
 use crate::error::BiResult;

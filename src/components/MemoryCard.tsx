@@ -139,6 +139,7 @@ export const MemoryCard = memo(function MemoryCard({
       {isCode ? (
         <CodeBlock
           code={stripLeadingPathComment(memory.content, memory.file_path)}
+          language={memory.language ?? undefined}
           maxLines={4}
         />
       ) : (

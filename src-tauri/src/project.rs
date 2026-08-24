@@ -4,6 +4,8 @@
 // Issue #387: project templates for rust-service / nextjs-app / python-lib onboarding.
 // Issue #298: diff_projects — compare memory sets between projects.
 
+// Issue #333: Filesystem path allowlist for ingest / watch / import.
+
 use crate::db::log_activity;
 use crate::error::{BiError, BiResult};
 use crate::state::AppState;

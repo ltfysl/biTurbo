@@ -106,6 +106,9 @@ interface AppStore {
   showContextMenu: (x: number, y: number, items: ContextMenuItem[]) => void;
   closeContextMenu: () => void;
 }
+// (#301) Per-slice idle|loading|ready|error status layer pending beyond
+// memoriesLoading and bootstrapLoaded; views currently improvise skeletons.
+
 
 const THEME_KEY = "biturbo.theme";
 const VIEW_KEY = "biturbo.view";
@@ -318,6 +321,7 @@ export const useApp = create<AppStore>((set, get) => ({
     const b = await api.bootstrap();
     const projects = b.projects;
     const storedProject = get().currentProjectId;
+    // (#306) Persisted last-used project is honored; first-indexed is the fallback.
     const currentProjectId = projects.some((p) => p.id === storedProject)
       ? storedProject
       : (projects.find((p) => p.indexed_count > 0)?.id ?? projects[0]?.id ?? "default");

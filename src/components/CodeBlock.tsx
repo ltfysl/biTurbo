@@ -24,13 +24,14 @@ function TokenSpan({ kind, children }: { kind: string; children: React.ReactNode
 
 interface CodeBlockProps {
   code: string;
+  language?: string;
   maxLines?: number;
   className?: string;
   /** (#51) Show a hover copy button. */
   showCopy?: boolean;
 }
 
-export function CodeBlock({ code, maxLines, className, showCopy }: CodeBlockProps) {
+export function CodeBlock({ code, language, maxLines, className, showCopy }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const lines = code.split("\n");
   const shown = maxLines ? lines.slice(0, maxLines) : lines;
@@ -62,16 +63,16 @@ export function CodeBlock({ code, maxLines, className, showCopy }: CodeBlockProp
       <pre className={`code-block ${className ?? ""}`}>
         <code>
         {shown.map((line, i) => (
-          <div key={i} className={lineClass}>
-            {tokenizeCode(line).map((tok, j) => (
+          <span key={i} className={lineClass}>
+            {tokenizeCode(line, language).map((tok, j) => (
               <TokenSpan key={j} kind={tok.kind}>
                 {tok.text}
               </TokenSpan>
             ))}
             {line.length === 0 && "\u00A0"}
-          </div>
+          </span>
         ))}
-        {truncated && <div className="code-block-line text-text-dim">…</div>}
+        {truncated && <span className="code-block-line text-text-dim">…</span>}
         </code>
       </pre>
     </div>
