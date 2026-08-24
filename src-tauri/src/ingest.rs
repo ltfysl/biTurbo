@@ -1409,12 +1409,16 @@ fn collect_chunks(bundle: &LangBundle, root: tree_sitter::Node<'_>, source: &str
                 } else {
                     node
                 };
-                let start = node.start_position().row;
+                let start = node.start_position().row.min(lines.len().saturating_sub(1));
                 let end = end_node
                     .end_position()
                     .row
                     .min(start + 200)
-                    .min(lines.len() - 1);
+                    .min(lines.len() - 1)
+                    .max(start);
+                if start > end {
+                    continue;
+                }
                 let start_line = start + 1;
                 let end_line = end + 1;
                 if !seen_spans.insert((start_line, end_line)) {
