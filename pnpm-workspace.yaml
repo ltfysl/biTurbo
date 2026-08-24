@@ -1,0 +1,5 @@
+# `landing` package removed from the workspace list because the directory does
+# not exist; restore it only when the package is created (#509).
+
+allowBuilds:
+  esbuild: set this to true or false
